@@ -51,6 +51,8 @@ export const UserManager: React.FC = () => {
   const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>('الكل');
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
 
+  const isSuperAdminOrDev = currentUser?.role === 'admin' || currentUser?.role === 'developer';
+
   const handleSyncSupabase = async (direction: 'fetch' | 'push' | 'both') => {
     setSyncFeedback(null);
     const res = await syncWithSupabase(direction);
@@ -131,14 +133,14 @@ export const UserManager: React.FC = () => {
   };
 
   const handleConfirmApproval = () => {
-    if (!approvingUser) return;
+    if (!approvingUser || !isSuperAdminOrDev) return;
     approveUser(approvingUser.id, approvalSupervisorId || undefined, approvalBranchName, approvalRole);
     setApprovingUser(null);
   };
 
   const handleSaveUser = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.username) return;
+    if (!formData.name || !formData.username || !isSuperAdminOrDev) return;
 
     if (editingUser) {
       updateUser({ ...editingUser, ...formData } as User);
@@ -183,29 +185,36 @@ export const UserManager: React.FC = () => {
             </div>
           </div>
 
-          <button
-            onClick={() => {
-              setEditingUser(null);
-              setFormData({
-                name: '',
-                username: '',
-                email: '',
-                password: '123',
-                role: 'sales_rep',
-                branchName: 'فرع أكتوبر (الفرع الرئيسي والمخزن المركزي)',
-                supervisorId: '',
-                phone: '',
-                commissionRate: 2.5,
-                isActive: true,
-                approvalStatus: 'active',
-              });
-              setShowAddUserModal(true);
-            }}
-            className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-4 py-2.5 rounded-xl text-xs shadow-md transition transform active:scale-95"
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>إنشاء حساب جديد (مندوب / مشرف / أدمن)</span>
-          </button>
+          {isSuperAdminOrDev ? (
+            <button
+              onClick={() => {
+                setEditingUser(null);
+                setFormData({
+                  name: '',
+                  username: '',
+                  email: '',
+                  password: '123',
+                  role: 'sales_rep',
+                  branchName: 'فرع أكتوبر (الفرع الرئيسي والمخزن المركزي)',
+                  supervisorId: '',
+                  phone: '',
+                  commissionRate: 2.5,
+                  isActive: true,
+                  approvalStatus: 'active',
+                });
+                setShowAddUserModal(true);
+              }}
+              className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-4 py-2.5 rounded-xl text-xs shadow-md transition transform active:scale-95 cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>إنشاء حساب جديد (صلاحية الإدارة والمطور)</span>
+            </button>
+          ) : (
+            <div className="bg-amber-50 text-amber-800 border border-amber-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2">
+              <Lock className="w-4 h-4 text-amber-600" />
+              <span>إضافة وتعديل المستخدمين مقتصرة على المطور والمدير العام (Admin) فقط</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -499,24 +508,30 @@ export const UserManager: React.FC = () => {
                           <span>{isCurrent ? 'الحالي' : 'تجربة'}</span>
                         </button>
 
-                        {/* Edit */}
-                        <button
-                          onClick={() => {
-                            setEditingUser(user);
-                            setFormData(user);
-                            setShowAddUserModal(true);
-                          }}
-                          className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600"
-                          title="تعديل المستخدم"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-
-                        {/* Delete (if not self) */}
-                        {!isCurrent && (
+                        {/* Edit (Admin & Dev only) */}
+                        {isSuperAdminOrDev && (
                           <button
-                            onClick={() => deleteUser(user.id)}
-                            className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600"
+                            onClick={() => {
+                              setEditingUser(user);
+                              setFormData(user);
+                              setShowAddUserModal(true);
+                            }}
+                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
+                            title="تعديل المستخدم (صلاحية الإدارة والمطور)"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
+                        {/* Delete (Admin & Dev only, if not self) */}
+                        {isSuperAdminOrDev && !isCurrent && (
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`هل أنت متأكد من حذف المستخدم "${user.name}"؟`)) {
+                                deleteUser(user.id);
+                              }
+                            }}
+                            className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 cursor-pointer"
                             title="حذف المستخدم"
                           >
                             <Trash2 className="w-3.5 h-3.5" />

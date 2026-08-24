@@ -475,8 +475,8 @@ export const InventoryStockView: React.FC = () => {
                   <span>تصدير كشف المخزون (Excel)</span>
                 </button>
 
-                {/* Add New Product (Admin / Branch Manager) */}
-                {(currentUser?.role === 'admin' || currentUser?.role === 'branch_manager') && (
+                {/* Add New Product (Admin / Developer Only) */}
+                {(currentUser?.role === 'admin' || currentUser?.role === 'developer') && (
                   <button
                     onClick={() => {
                       setEditingProduct(null);
