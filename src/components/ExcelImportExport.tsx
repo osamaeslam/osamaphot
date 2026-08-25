@@ -27,7 +27,10 @@ import {
   Search,
   Share2,
   Sparkles,
+  Store,
   Upload,
+  UserCheck,
+  Users,
   X,
   Trash2
 } from 'lucide-react';
@@ -35,18 +38,39 @@ import React, { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { getProductImageUrl } from '../services/cloudinaryService';
 import {
+  exportCustomersToExcel,
   exportProductsToExcel,
   fetchAndParseGoogleSheet,
+  fetchCustomersFromGoogleSheetUrl,
+  generateSampleCustomersTemplate,
   generateSampleExcelTemplate,
+  parseExcelCustomers,
   parseExcelProducts
 } from '../services/excelService';
 import { formatCurrency } from '../services/invoiceService';
-import { Product } from '../types';
+import { Customer, Product } from '../types';
 
 export const ExcelImportExport: React.FC = () => {
-  const { products, importProductsList, wipeAllProductsAndData, selectedBranchFilter } = useApp();
+  const {
+    products,
+    customers,
+    importProductsList,
+    importCustomersList,
+    deleteCustomer,
+    wipeAllProductsAndData,
+    selectedBranchFilter
+  } = useApp();
 
-  const [activeSubTab, setActiveSubTab] = useState<'google_sheets' | 'excel_file' | 'drive_scanner'>('google_sheets');
+  const [activeSubTab, setActiveSubTab] = useState<'google_sheets' | 'excel_file' | 'drive_scanner' | 'customers'>('google_sheets');
+
+  // Customer Management State
+  const [customerGoogleSheetUrl, setCustomerGoogleSheetUrl] = useState('');
+  const [isSyncingCustomers, setIsSyncingCustomers] = useState(false);
+  const [customerSheetSuccess, setCustomerSheetSuccess] = useState<string | null>(null);
+  const [customerSheetError, setCustomerSheetError] = useState<string | null>(null);
+  const [customerPreviewList, setCustomerPreviewList] = useState<Customer[]>([]);
+  const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+  const [customerImportMode, setCustomerImportMode] = useState<'merge' | 'replace'>('merge');
 
   // Wipe / Reset Modal State
   const [isWipeModalOpen, setIsWipeModalOpen] = useState(false);
@@ -251,7 +275,7 @@ function onEdit(e) {
             }`}
           >
             <Globe className="w-4 h-4" />
-            <span>ربط مباشر مع Google Sheets</span>
+            <span>ربط المنتجات مع Google Sheets</span>
             <span className="bg-emerald-100 text-emerald-800 text-[10px] px-1.5 py-0.5 rounded-full font-bold">مباشر Live</span>
           </button>
 
@@ -264,7 +288,20 @@ function onEdit(e) {
             }`}
           >
             <Upload className="w-4 h-4" />
-            <span>رفع ملف إكسل (Excel / CSV)</span>
+            <span>رفع ملف إكسل للمنتجات</span>
+          </button>
+
+          <button
+            onClick={() => setActiveSubTab('customers')}
+            className={`pb-3 px-4 text-xs sm:text-sm font-black border-b-2 flex items-center gap-2 transition whitespace-nowrap ${
+              activeSubTab === 'customers'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Users className="w-4 h-4 text-amber-600" />
+            <span>قاعدة بيانات العملاء (شيتات وإكسل)</span>
+            <span className="bg-amber-100 text-amber-900 text-[10px] px-1.5 py-0.5 rounded-full font-bold">{customers.length} عميل</span>
           </button>
 
           <button
@@ -276,7 +313,7 @@ function onEdit(e) {
             }`}
           >
             <FolderOpen className="w-4 h-4 text-blue-500" />
-            <span>ماسح مجلدات Google Drive الشامل</span>
+            <span>ماسح مجلدات Google Drive</span>
             <span className="bg-blue-100 text-blue-900 text-[10px] px-1.5 py-0.5 rounded-full font-bold">Apps Script</span>
           </button>
         </div>
@@ -831,6 +868,335 @@ function processFolderRecursive(folder, sheet, currentPath) {
                 <span>تأكيد حفظ كافة الأصناف ({previewProducts.length} صنف) في المنظومة</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUB-TAB 4: Customers Database Management */}
+      {activeSubTab === 'customers' && (
+        <div className="space-y-6">
+          {/* Customer Google Sheets & Excel Sync Hero */}
+          <div className="bg-gradient-to-br from-amber-950 via-slate-900 to-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl border border-amber-800/40 space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center gap-2 bg-amber-500/20 text-amber-300 text-xs font-black px-3 py-1 rounded-full border border-amber-500/30 mb-2">
+                  <Store className="w-3.5 h-3.5" />
+                  <span>إدارة ومزامنة قاعدة بيانات العملاء والمحلات</span>
+                </div>
+                <h3 className="text-xl sm:text-2xl font-black text-white">
+                  ربط شيت العملاء (Google Sheets) أو رفع ملف إكسل
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                  استيراد ومزامنة كود العميل، اسم المحل / السوبر ماركت، رقم الهاتف، الفرع التابع له، المحافظة، والعنوان التفصيلي للاستخدام المباشر في فواتير المندوبين.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={generateSampleCustomersTemplate}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-black px-4 py-2.5 rounded-xl transition flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4 text-amber-400" />
+                  <span>تحميل نموذج شيت العملاء</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => exportCustomersToExcel(customers)}
+                  className="bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black px-4 py-2.5 rounded-xl transition shadow-sm flex items-center gap-2"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>تصدير العملاء المسجلين ({customers.length})</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Google Sheet URL Sync Input for Customers */}
+            <div className="bg-slate-950/60 p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-4">
+              <div className="space-y-1.5">
+                <label className="block text-xs sm:text-sm font-bold text-amber-200">
+                  رابط Google Sheets لقاعدة بيانات العملاء:
+                </label>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <input
+                    type="url"
+                    value={customerGoogleSheetUrl}
+                    onChange={(e) => {
+                      setCustomerGoogleSheetUrl(e.target.value);
+                      setCustomerSheetError(null);
+                      setCustomerSheetSuccess(null);
+                    }}
+                    placeholder="https://docs.google.com/spreadsheets/d/your-customer-sheet-id/edit..."
+                    className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                  <button
+                    type="button"
+                    disabled={isSyncingCustomers || !customerGoogleSheetUrl.trim()}
+                    onClick={async () => {
+                      if (!customerGoogleSheetUrl.trim()) return;
+                      setIsSyncingCustomers(true);
+                      setCustomerSheetError(null);
+                      setCustomerSheetSuccess(null);
+                      try {
+                        const res = await fetchCustomersFromGoogleSheetUrl(customerGoogleSheetUrl);
+                        if (res.errors.length > 0) {
+                          setCustomerSheetError(res.errors.join(' | '));
+                        }
+                        if (res.customers.length > 0) {
+                          setCustomerPreviewList(res.customers);
+                          setCustomerSheetSuccess(`تمت قراءة ${res.customers.length} عميل بنجاح من Google Sheets! راجع الجدول أدناه لتأكيد الحفظ.`);
+                        } else {
+                          setCustomerSheetError('لم يتم العثور على أي بيانات صالحة للعملاء داخل الشيت.');
+                        }
+                      } catch (err: any) {
+                        setCustomerSheetError(err?.message || 'تعذر الاتصال بـ Google Sheets');
+                      } finally {
+                        setIsSyncingCustomers(false);
+                      }
+                    }}
+                    className="bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black px-6 py-3 rounded-xl text-xs sm:text-sm shadow-md transition disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    {isSyncingCustomers ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>جاري جلب العملاء...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Globe className="w-4 h-4" />
+                        <span>قراءة شيت العملاء</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Status alerts */}
+              {customerSheetSuccess && (
+                <div className="bg-emerald-950/80 border border-emerald-500/50 text-emerald-200 p-3.5 rounded-xl text-xs flex items-center gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{customerSheetSuccess}</span>
+                </div>
+              )}
+              {customerSheetError && (
+                <div className="bg-rose-950/80 border border-rose-500/50 text-rose-200 p-3.5 rounded-xl text-xs flex items-center gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>{customerSheetError}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Direct Excel File Upload for Customers */}
+            <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+              <div className="text-slate-300 flex items-center gap-2">
+                <Upload className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>أو يمكنك رفع ملف إكسل للعملاء مباشرة من جهازك (.xlsx / .csv):</span>
+              </div>
+              <label className="bg-slate-800 hover:bg-slate-700 text-white font-bold px-4 py-2 rounded-xl cursor-pointer border border-slate-700 transition">
+                <span>اختيار ملف العملاء من الجهاز</span>
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    setIsSyncingCustomers(true);
+                    setCustomerSheetError(null);
+                    setCustomerSheetSuccess(null);
+                    try {
+                      const res = await parseExcelCustomers(file);
+                      if (res.errors.length > 0) setCustomerSheetError(res.errors.join(' | '));
+                      if (res.customers.length > 0) {
+                        setCustomerPreviewList(res.customers);
+                        setCustomerSheetSuccess(`تمت قراءة ${res.customers.length} عميل من الملف بنجاح!`);
+                      }
+                    } catch (err: any) {
+                      setCustomerSheetError(err?.message || 'خطأ أثناء قراءة ملف العملاء');
+                    } finally {
+                      setIsSyncingCustomers(false);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+
+          {/* Customer Preview Table (if loaded from sheet/file) */}
+          {customerPreviewList.length > 0 && (
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
+                <div>
+                  <h4 className="text-base font-black text-slate-900 flex items-center gap-2">
+                    <UserCheck className="w-5 h-5 text-emerald-600" />
+                    <span>معاينة العملاء المستوردين ({customerPreviewList.length} عميل)</span>
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    اختر طريقة الاستيراد واضغط على زر الحفظ لتحديث قاعدة البيانات.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <select
+                    value={customerImportMode}
+                    onChange={(e) => setCustomerImportMode(e.target.value as 'merge' | 'replace')}
+                    className="bg-slate-100 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800"
+                  >
+                    <option value="merge">دمج وتحديث العملاء (Merge)</option>
+                    <option value="replace">استبدال كامل السجل (Replace)</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      importCustomersList(customerPreviewList, customerImportMode);
+                      setCustomerPreviewList([]);
+                      setCustomerSheetSuccess('تم حفظ وتحديث قاعدة بيانات العملاء بنجاح في المنظومة!');
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-5 py-2 rounded-xl text-xs shadow transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>تأكيد حفظ العملاء ({customerPreviewList.length})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCustomerPreviewList([])}
+                    className="text-xs text-slate-500 hover:text-slate-700 px-3 py-2"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </div>
+
+              {/* Preview Customer Table */}
+              <div className="overflow-x-auto max-h-72 border border-slate-200 rounded-2xl">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-100 text-slate-700 font-black sticky top-0">
+                    <tr>
+                      <th className="p-3">#</th>
+                      <th className="p-3">كود العميل</th>
+                      <th className="p-3">اسم العميل</th>
+                      <th className="p-3">اسم المحل / السوبر ماركت</th>
+                      <th className="p-3">رقم الهاتف</th>
+                      <th className="p-3">الفرع</th>
+                      <th className="p-3">المحافظة / العنوان</th>
+                      <th className="p-3">الرقم الضريبي</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-semibold text-slate-800">
+                    {customerPreviewList.map((c, i) => (
+                      <tr key={c.id || i} className="hover:bg-amber-50/50">
+                        <td className="p-3 text-slate-400">{i + 1}</td>
+                        <td className="p-3 font-mono font-bold text-amber-800">{c.code}</td>
+                        <td className="p-3 font-bold text-slate-950">{c.name}</td>
+                        <td className="p-3">{c.storeName || '---'}</td>
+                        <td className="p-3">{c.phone || '---'}</td>
+                        <td className="p-3">{c.branchName || 'الفرع الرئيسي'}</td>
+                        <td className="p-3">{c.address || c.governorate || '---'}</td>
+                        <td className="p-3">{c.taxNumber || '---'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Current Saved Customers Table */}
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center font-black">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-base font-black text-slate-900">
+                    سجل العملاء النشط بالمنظومة ({customers.length} عميل)
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    يتم استدعاء هؤلاء العملاء تلقائياً في شاشة الفواتير للمندوبين والبحث السريع
+                  </p>
+                </div>
+              </div>
+
+              {/* Search Bar for current customers */}
+              <div className="relative w-full sm:w-72">
+                <input
+                  type="text"
+                  value={customerSearchTerm}
+                  onChange={(e) => setCustomerSearchTerm(e.target.value)}
+                  placeholder="بحث بالاسم، الكود، الهاتف، المحل..."
+                  className="w-full h-10 pr-9 pl-4 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 font-bold"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
+              </div>
+            </div>
+
+            {customers.length === 0 ? (
+              <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-300 text-slate-500 text-xs">
+                لا يوجد عملاء مسجلين حالياً. قم بربط Google Sheet أو رفع ملف إكسل أعلاه.
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 rounded-2xl max-h-96">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-100 text-slate-700 font-black sticky top-0">
+                    <tr>
+                      <th className="p-3">#</th>
+                      <th className="p-3">كود العميل</th>
+                      <th className="p-3">اسم العميل</th>
+                      <th className="p-3">اسم المحل / المعرض</th>
+                      <th className="p-3">رقم الهاتف</th>
+                      <th className="p-3">الفرع التابع له</th>
+                      <th className="p-3">العنوان والمحافظة</th>
+                      <th className="p-3">الرقم الضريبي</th>
+                      <th className="p-3 text-center">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+                    {customers
+                      .filter((c) => {
+                        if (!customerSearchTerm.trim()) return true;
+                        const q = customerSearchTerm.toLowerCase().trim();
+                        return (
+                          c.name.toLowerCase().includes(q) ||
+                          (c.code && c.code.toLowerCase().includes(q)) ||
+                          (c.phone && c.phone.includes(q)) ||
+                          (c.storeName && c.storeName.toLowerCase().includes(q)) ||
+                          (c.governorate && c.governorate.toLowerCase().includes(q)) ||
+                          (c.branchName && c.branchName.toLowerCase().includes(q))
+                        );
+                      })
+                      .map((c, i) => (
+                        <tr key={c.id} className="hover:bg-amber-50/40">
+                          <td className="p-3 text-slate-400 font-bold">{i + 1}</td>
+                          <td className="p-3 font-mono font-bold text-amber-900">{c.code || '---'}</td>
+                          <td className="p-3 font-black text-slate-900">{c.name}</td>
+                          <td className="p-3 font-bold text-slate-700">{c.storeName || '---'}</td>
+                          <td className="p-3 font-bold text-emerald-800">{c.phone || '---'}</td>
+                          <td className="p-3 text-slate-600">{c.branchName || 'الفرع الرئيسي'}</td>
+                          <td className="p-3 text-slate-600">{c.address || c.governorate || '---'}</td>
+                          <td className="p-3 font-mono text-slate-500">{c.taxNumber || '---'}</td>
+                          <td className="p-3 text-center">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (window.confirm(`هل أنت متأكد من حذف العميل (${c.name})؟`)) {
+                                  deleteCustomer(c.id);
+                                }
+                              }}
+                              className="text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 cursor-pointer transition"
+                              title="حذف العميل"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}

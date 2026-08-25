@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { exportElectronicInvoiceToExcel } from '../services/excelService';
+import { exportElectronicInvoiceToExcel, exportInvoiceForERP } from '../services/excelService';
 import { downloadInvoicePDF } from '../services/pdfService';
 import { formatArabicDate, formatCurrency, shareInvoiceViaWhatsApp } from '../services/invoiceService';
 import { Invoice, OrderStatus } from '../types';
@@ -584,11 +584,24 @@ export const InvoicesManager: React.FC<InvoicesManagerProps> = ({
                             <Download className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Export Excel (.xlsx) */}
+                          {/* Export Excel ERP Format */}
+                          <button
+                            onClick={() => {
+                              exportInvoiceForERP(invoice);
+                              setSuccessToast(`تم تصدير ملف إكسل منسق للسيستم الرئيسي (ERP) للفاتورة ${invoice.invoiceNumber}`);
+                              setTimeout(() => setSuccessToast(null), 3000);
+                            }}
+                            className="bg-amber-500 hover:bg-amber-400 text-slate-950 p-1.5 rounded-lg transition cursor-pointer shadow-xs font-bold"
+                            title="تصدير شيت إكسل جاهز للرفع على السيستم الرئيسي (ERP)"
+                          >
+                            <FileSpreadsheet className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Export Standard Excel (.xlsx) */}
                           <button
                             onClick={() => exportElectronicInvoiceToExcel(invoice)}
                             className="bg-emerald-700 hover:bg-emerald-800 text-white p-1.5 rounded-lg transition cursor-pointer"
-                            title="تحميل شيت إكسل رسمي"
+                            title="تحميل شيت إكسل عادي للعميل"
                           >
                             <FileSpreadsheet className="w-3.5 h-3.5" />
                           </button>

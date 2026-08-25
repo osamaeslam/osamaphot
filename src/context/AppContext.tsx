@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
   INITIAL_AUDIT_LOGS,
   INITIAL_BRANCHES,
+  INITIAL_CUSTOMERS,
   INITIAL_INVOICES,
   INITIAL_PRODUCTS,
   INITIAL_USERS
@@ -9,9 +10,11 @@ import {
 import { DEFAULT_CLOUDINARY_CONFIG } from '../services/cloudinaryService';
 import { clearCachedImages } from '../services/imageCacheService';
 import {
+  fetchCustomersFromSupabase,
   fetchInvoicesFromSupabase,
   fetchProductsFromSupabase,
   fetchUsersFromSupabase,
+  saveCustomersToSupabase,
   saveInvoiceToSupabase,
   saveProductsToSupabase,
   saveUserToSupabase,
@@ -25,6 +28,7 @@ import {
   Branch,
   CartItem,
   CloudinaryConfig,
+  Customer,
   InventoryTransaction,
   Invoice,
   OrderStatus,
@@ -40,6 +44,7 @@ interface AppContextType {
   users: User[];
   branches: Branch[];
   products: Product[];
+  customers: Customer[];
   invoices: Invoice[];
   cart: CartItem[];
   cloudinaryConfig: CloudinaryConfig;
@@ -56,7 +61,12 @@ interface AppContextType {
   isSupabaseSyncing: boolean;
   syncWithSupabase: (direction?: 'fetch' | 'push' | 'both') => Promise<{ success: boolean; message: string }>;
 
-  
+  // Customer Management Actions
+  addCustomer: (customer: Customer) => void;
+  updateCustomer: (customer: Customer) => void;
+  deleteCustomer: (customerId: string) => void;
+  importCustomersList: (newCustomers: Customer[], mode?: 'merge' | 'replace') => void;
+
   // Auth actions
   login: (identifier: string, password?: string) => { success: boolean; message: string; user?: User };
   register: (userData: {
@@ -71,8 +81,8 @@ interface AppContextType {
   }) => { success: boolean; message: string };
   logout: () => void;
 
-  // Cart Actions
-  addToCart: (product: Product, orderType?: 'carton' | 'piece', count?: number) => { success: boolean; message?: string };
+  // Cart Actions (Smart Carton & Piece Logic)
+  addToCart: (product: Product, orderType?: 'carton' | 'piece' | 'mixed', count?: number, piecesCount?: number) => { success: boolean; message?: string };
   updateCartItem: (productId: string, updates: Partial<CartItem>) => void;
   removeFromCart: (productId: string) => void;
   clearCart: () => void;
@@ -148,6 +158,7 @@ const STORAGE_KEYS = {
   INVOICES: 'dream_dist_invoices_v9',
   USERS: 'dream_dist_users_v9',
   BRANCHES: 'dream_dist_branches_v9',
+  CUSTOMERS: 'dream_dist_customers_v9',
   CLOUDINARY: 'dream_dist_cloudinary_v9',
   CURRENT_USER_ID: 'dream_dist_current_user_v9',
   IS_AUTH: 'dream_dist_is_auth_v9',
@@ -278,6 +289,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {
       return sanitizeProducts(INITIAL_PRODUCTS);
     }
+  });
+
+  const [customers, setCustomers] = useState<Customer[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
+    return saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
   });
 
   const [invoices, setInvoices] = useState<Invoice[]>(() => {
@@ -553,10 +569,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
+  // Customer CRUD Actions
+  const addCustomer = (newCust: Customer) => {
+    setCustomers((prev) => [newCust, ...prev]);
+    saveCustomersToSupabase([newCust]).catch((e) => console.warn('Supabase customer save error:', e));
+    recordAuditLog({
+      userId: currentUser?.id || 'admin',
+      userName: currentUser?.name || 'مستخدم',
+      userRole: currentUser?.role || 'sales_rep',
+      branchName: newCust.branchName || currentUser?.branchName || 'الفرع الرئيسي',
+      action: 'add_customer' as any,
+      actionTitle: `إضافة عميل جديد (${newCust.name})`,
+      details: `تمت إضافة العميل بكود (${newCust.code}) وهاتف (${newCust.phone || '---'}).`,
+      badgeType: 'success',
+    });
+  };
+
+  const updateCustomer = (updatedCust: Customer) => {
+    setCustomers((prev) => prev.map((c) => (c.id === updatedCust.id ? updatedCust : c)));
+    saveCustomersToSupabase([updatedCust]).catch((e) => console.warn('Supabase customer update error:', e));
+  };
+
+  const deleteCustomer = (customerId: string) => {
+    setCustomers((prev) => prev.filter((c) => c.id !== customerId));
+  };
+
+  const importCustomersList = (newCustomers: Customer[], mode: 'merge' | 'replace' = 'merge') => {
+    if (mode === 'replace') {
+      setCustomers(newCustomers);
+    } else {
+      setCustomers((prev) => {
+        const map = new Map<string, Customer>();
+        prev.forEach((c) => map.set(c.id, c));
+        prev.forEach((c) => map.set(c.code.toLowerCase(), c));
+        newCustomers.forEach((c) => {
+          map.set(c.id, c);
+          map.set(c.code.toLowerCase(), c);
+        });
+        return Array.from(new Set(map.values()));
+      });
+    }
+    saveCustomersToSupabase(newCustomers).catch((e) => console.warn('Supabase customer bulk save error:', e));
+  };
+
   // Sync to local storage
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
   }, [products]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
+  }, [customers]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(invoices));
@@ -804,18 +867,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { available: true, remainingPieces: totalAvailable };
   };
 
-  // --- Cart Actions with Concurrency Checks (Pure Carton Logic) ---
+  // --- Smart Cart Actions with Automatic Carton & Piece Conversion ---
   const addToCart = (
     product: Product,
-    orderType: 'carton' | 'piece' = 'carton',
-    count: number = 1
+    orderType: 'carton' | 'piece' | 'mixed' = 'carton',
+    count: number = 1,
+    piecesCount: number = 0
   ): { success: boolean; message?: string } => {
     const latestProd = products.find((p) => p.id === product.id) || product;
-    const cartonsToAdd = Math.max(1, count);
+    const cartonQty = latestProd.cartonQuantity && latestProd.cartonQuantity > 0 ? latestProd.cartonQuantity : 1;
 
-    const existing = cart.find((item) => item.product.id === latestProd.id);
-    const existingCartons = existing ? existing.cartonCount : 0;
-    const totalRequiredCartons = existingCartons + cartonsToAdd;
+    let cartonsToAdd = 0;
+    let piecesToAdd = 0;
+
+    if (orderType === 'piece') {
+      // User entered total pieces -> automatically convert to cartons + pieces!
+      const totalPiecesInput = Math.max(1, count);
+      cartonsToAdd = Math.floor(totalPiecesInput / cartonQty);
+      piecesToAdd = totalPiecesInput % cartonQty;
+    } else if (orderType === 'carton') {
+      cartonsToAdd = Math.max(0, count);
+      piecesToAdd = Math.max(0, piecesCount);
+      // Auto-wrap overflow pieces to cartons if >= cartonQty
+      if (piecesToAdd >= cartonQty) {
+        cartonsToAdd += Math.floor(piecesToAdd / cartonQty);
+        piecesToAdd = piecesToAdd % cartonQty;
+      }
+    } else {
+      cartonsToAdd = Math.max(0, count);
+      piecesToAdd = Math.max(0, piecesCount);
+      if (piecesToAdd >= cartonQty) {
+        cartonsToAdd += Math.floor(piecesToAdd / cartonQty);
+        piecesToAdd = piecesToAdd % cartonQty;
+      }
+    }
+
+    if (cartonsToAdd === 0 && piecesToAdd === 0) {
+      cartonsToAdd = 1;
+    }
+
+    const totalRequiredCartonFraction = cartonsToAdd + (piecesToAdd / cartonQty);
 
     const branchActual = latestProd.branchStockActual || 0;
     const availableInBranch = Math.max(0, latestProd.branchStockReserved);
@@ -836,35 +927,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    if (totalRequiredCartons > totalAvailable) {
-      return {
-        success: false,
-        message: `⚠️ تنبيه تجاوز الرصيد المتاح:\nطلبك (${totalRequiredCartons} كرتونة) يتجاوز الرصيد الصافي المتاح بعد حجز الفواتير المعلقة (${totalAvailable} كرتونة متبقية فقط).\n(الرصيد الفعلي: ${totalActual} كرتونة | المحجوز حالياً: ${totalReserved} كرتونة).`
-      };
-    }
-
     const appliedCartonPrice = latestProd.promoPrice && latestProd.promoPrice > 0 ? latestProd.promoPrice : latestProd.cartonPrice;
+    const piecePrice = latestProd.piecePrice && latestProd.piecePrice > 0 ? latestProd.piecePrice : (cartonQty > 0 ? Math.round((appliedCartonPrice / cartonQty) * 100) / 100 : appliedCartonPrice);
 
     setCart((prev) => {
       const existingInCart = prev.find((item) => item.product.id === latestProd.id);
 
       if (existingInCart) {
-        const newCartonCount = existingInCart.cartonCount + cartonsToAdd;
-        const totalPrice = newCartonCount * appliedCartonPrice;
+        let newCartonCount = existingInCart.cartonCount + cartonsToAdd;
+        let newPieceCount = (existingInCart.pieceCount || 0) + piecesToAdd;
+        if (newPieceCount >= cartonQty) {
+          newCartonCount += Math.floor(newPieceCount / cartonQty);
+          newPieceCount = newPieceCount % cartonQty;
+        }
+
+        const totalPrice = (newCartonCount * appliedCartonPrice) + (newPieceCount * piecePrice);
+        const totalUnits = (newCartonCount * cartonQty) + newPieceCount;
 
         return prev.map((item) =>
           item.product.id === latestProd.id
             ? {
                 ...item,
                 cartonCount: newCartonCount,
+                pieceCount: newPieceCount,
+                totalPieces: totalUnits,
+                cartonQuantity: cartonQty,
                 unitPrice: appliedCartonPrice,
+                pricePerPiece: piecePrice,
                 totalPrice,
                 orderType: 'carton',
+                quantityDescription: newCartonCount > 0 && newPieceCount > 0 ? `${newCartonCount} كرتونة و ${newPieceCount} قطعة` : newCartonCount > 0 ? `${newCartonCount} كرتونة` : `${newPieceCount} قطعة`,
               }
             : item
         );
       } else {
-        const totalPrice = cartonsToAdd * appliedCartonPrice;
+        const totalPrice = (cartonsToAdd * appliedCartonPrice) + (piecesToAdd * piecePrice);
+        const totalUnits = (cartonsToAdd * cartonQty) + piecesToAdd;
 
         return [
           ...prev,
@@ -872,8 +970,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             product: latestProd,
             orderType: 'carton',
             cartonCount: cartonsToAdd,
+            pieceCount: piecesToAdd,
+            totalPieces: totalUnits,
+            cartonQuantity: cartonQty,
             unitPrice: appliedCartonPrice,
+            pricePerPiece: piecePrice,
             totalPrice,
+            quantityDescription: cartonsToAdd > 0 && piecesToAdd > 0 ? `${cartonsToAdd} كرتونة و ${piecesToAdd} قطعة` : cartonsToAdd > 0 ? `${cartonsToAdd} كرتونة` : `${piecesToAdd} قطعة`,
             fulfillFromMainWarehouse: latestProd.branchStockActual <= 0 && latestProd.mainWarehouseActual > 0,
           },
         ];
@@ -888,19 +991,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       prev.map((item) => {
         if (item.product.id !== productId) return item;
         const merged = { ...item, ...updates };
+        const cartonQty = merged.product.cartonQuantity && merged.product.cartonQuantity > 0 ? merged.product.cartonQuantity : 1;
         const appliedCartonPrice =
           merged.product.promoPrice && merged.product.promoPrice > 0
             ? merged.product.promoPrice
             : merged.product.cartonPrice;
+        const piecePrice = merged.product.piecePrice && merged.product.piecePrice > 0 ? merged.product.piecePrice : (cartonQty > 0 ? Math.round((appliedCartonPrice / cartonQty) * 100) / 100 : appliedCartonPrice);
 
-        const safeCartonCount = Math.max(1, merged.cartonCount || 1);
-        const totalPrice = safeCartonCount * appliedCartonPrice;
+        let safeCartonCount = Math.max(0, merged.cartonCount ?? 0);
+        let safePieceCount = Math.max(0, merged.pieceCount ?? 0);
+
+        // Auto-wrap overflow pieces into cartons
+        if (safePieceCount >= cartonQty) {
+          safeCartonCount += Math.floor(safePieceCount / cartonQty);
+          safePieceCount = safePieceCount % cartonQty;
+        }
+
+        if (safeCartonCount === 0 && safePieceCount === 0) {
+          safeCartonCount = 1;
+        }
+
+        const totalPrice = (safeCartonCount * appliedCartonPrice) + (safePieceCount * piecePrice);
+        const totalUnits = (safeCartonCount * cartonQty) + safePieceCount;
+
+        const desc = safeCartonCount > 0 && safePieceCount > 0 
+          ? `${safeCartonCount} كرتونة و ${safePieceCount} قطعة` 
+          : safeCartonCount > 0 
+          ? `${safeCartonCount} كرتونة` 
+          : `${safePieceCount} قطعة`;
 
         return {
           ...merged,
           cartonCount: safeCartonCount,
+          pieceCount: safePieceCount,
+          totalPieces: totalUnits,
+          cartonQuantity: cartonQty,
           unitPrice: appliedCartonPrice,
+          pricePerPiece: piecePrice,
           totalPrice,
+          quantityDescription: desc,
           orderType: 'carton',
         };
       })
@@ -915,10 +1044,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const getCartSummary = (customDiscountPercent?: number) => {
     let totalCartons = 0;
+    let totalPieces = 0;
     let subtotal = 0;
 
     cart.forEach((item) => {
+      const cQty = item.product.cartonQuantity || 1;
       totalCartons += item.cartonCount;
+      totalPieces += (item.cartonCount * cQty) + (item.pieceCount || 0);
       subtotal += item.totalPrice;
     });
 
@@ -929,7 +1061,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       totalCartons,
-      totalPieces: totalCartons,
+      totalPieces,
       subtotal,
       discountPercentage,
       discountAmount,
@@ -1160,19 +1292,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return items.map((item) => {
         const cartonQty = item.product.cartonQuantity || 1;
         const appliedCartonPrice = item.product.promoPrice && item.product.promoPrice > 0 ? item.product.promoPrice : item.product.cartonPrice;
-        const itemSubtotal = item.cartonCount * appliedCartonPrice;
+        const piecePrice = item.product.piecePrice && item.product.piecePrice > 0 ? item.product.piecePrice : (cartonQty > 0 ? Math.round((appliedCartonPrice / cartonQty) * 100) / 100 : appliedCartonPrice);
+        
+        const cCount = item.cartonCount || 0;
+        const pCount = item.pieceCount || 0;
+        const itemSubtotal = (cCount * appliedCartonPrice) + (pCount * piecePrice);
         const itemDiscount = itemSubtotal * (orderDiscountPercent / 100);
         const itemTax = 0;
+        const totalUnits = (cCount * cartonQty) + pCount;
+
+        const smartDesc = cCount > 0 && pCount > 0 
+          ? `${cCount} كرتونة و ${pCount} قطعة` 
+          : cCount > 0 
+          ? `${cCount} كرتونة` 
+          : `${pCount} قطعة`;
 
         return {
           productId: item.product.id,
           productCode: item.product.code,
           productName: item.product.name,
-          cartonCount: item.cartonCount,
-          pieceCount: 0,
+          cartonCount: cCount,
+          pieceCount: pCount,
           cartonQuantity: cartonQty,
-          totalUnits: item.cartonCount,
-          pricePerPiece: item.product.piecePrice || 0,
+          totalUnits,
+          quantityDescription: smartDesc,
+          pricePerPiece: piecePrice,
           pricePerCarton: item.product.cartonPrice,
           appliedPrice: appliedCartonPrice,
           totalBeforeTax: itemSubtotal,
@@ -1187,14 +1331,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const calculateTotals = (items: ReturnType<typeof buildInvoiceItems>) => {
       let subtotal = 0;
       let totalCartons = 0;
+      let totalPieces = 0;
       items.forEach((it) => {
         subtotal += it.totalBeforeTax;
         totalCartons += it.cartonCount;
+        totalPieces += it.totalUnits;
       });
       const discountAmount = subtotal * (orderDiscountPercent / 100);
       const taxAmount = 0;
       const estimatedGrandTotal = Math.max(0, subtotal - discountAmount);
-      return { subtotal, totalCartons, totalPieces: totalCartons, discountAmount, taxAmount, estimatedGrandTotal };
+      return { subtotal, totalCartons, totalPieces, discountAmount, taxAmount, estimatedGrandTotal };
     };
 
     const primaryItems = buildInvoiceItems(primaryCartItems);
@@ -1893,6 +2039,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         users,
         branches,
         products,
+        customers,
         invoices,
         cart,
         cloudinaryConfig,
@@ -1907,6 +2054,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         supabaseStatus,
         isSupabaseSyncing,
         syncWithSupabase,
+        addCustomer,
+        updateCustomer,
+        deleteCustomer,
+        importCustomersList,
         login,
         register,
         logout,

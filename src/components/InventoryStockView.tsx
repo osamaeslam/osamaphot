@@ -35,6 +35,7 @@ import { useApp } from '../context/AppContext';
 import { exportProductsToExcel } from '../services/excelService';
 import { formatCurrency } from '../services/invoiceService';
 import { ItemStatus, Product, SalesPriority } from '../types';
+import { getDepartmentMeta } from '../data/departmentMeta';
 
 export const InventoryStockView: React.FC = () => {
   const {
@@ -594,8 +595,22 @@ export const InventoryStockView: React.FC = () => {
                         {/* Name */}
                         <td className="p-3">
                           <div className="font-extrabold text-slate-900 text-xs sm:text-sm">{p.name}</div>
-                          <div className="text-[10px] text-slate-400">
-                            {p.category} • {p.department}
+                          <div className="text-[10px] text-slate-500 flex items-center gap-1.5 mt-0.5">
+                            {(() => {
+                              const deptMeta = getDepartmentMeta(p.department || p.category);
+                              const DeptIcon = deptMeta.icon;
+                              return (
+                                <span className="bg-amber-50 text-amber-900 border border-amber-200 px-1.5 py-0.2 rounded font-black flex items-center gap-1">
+                                  <DeptIcon className="w-3 h-3 text-amber-700" />
+                                  <span>{p.department || 'عام'}</span>
+                                </span>
+                              );
+                            })()}
+                            {p.classification && (
+                              <span className="bg-slate-100 text-slate-700 px-1.5 py-0.2 rounded font-bold">
+                                🏷️ {p.classification}
+                              </span>
+                            )}
                           </div>
                         </td>
 

@@ -1,15 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
-import { Branch, Invoice, Product, User, UserRole } from '../types';
+import { Branch, Customer, Invoice, Product, User, UserRole } from '../types';
 
-export const SUPABASE_URL = 'https://kjdpayvavaarlcochzgt.supabase.co';
+export const SUPABASE_URL = 'https://rxthpgmlcsfckstpqhqf.supabase.co';
 export const SUPABASE_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtqZHBheXZhdmFhcmxjb2Noemd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk4OTg2MDIsImV4cCI6MjA4NTQ3NDYwMn0.Y6Vmn7zJZrdzVZMGupPTzDPdCh7yJmdzTbea_CRLM-g';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ4dGhwZ21sY3NmY2tzdHBxaHFmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2NDIwMzgsImV4cCI6MjEwMzIxODAzOH0.2v4eRUKQjLM0xDomaE9HAiy_qTJ6NoijNuwC3JV1ZUA';
 
 // Helper to normalize Supabase role strings to supported UserRole
 export function normalizeUserRole(rawRole: any, isAdminFlag?: boolean): UserRole {
   if (isAdminFlag) return 'admin';
   if (!rawRole) return 'sales_rep';
   const r = String(rawRole).toLowerCase().trim();
+  if (r === 'developer' || r.includes('dev')) return 'developer';
   if (r === 'admin' || r.includes('super_admin') || r.includes('superadmin')) return 'admin';
   if (r === 'branch_manager' || r.includes('manager') || r.includes('branch')) return 'branch_manager';
   if (r === 'supervisor' || r.includes('supervis')) return 'supervisor';
@@ -31,6 +32,7 @@ export interface SupabaseSyncStatus {
   usersCount?: number;
   productsCount?: number;
   invoicesCount?: number;
+  customersCount?: number;
   lastSyncTime?: string;
   error?: string;
 }
@@ -40,11 +42,11 @@ export interface SupabaseSyncStatus {
  */
 export async function testSupabaseConnection(): Promise<SupabaseSyncStatus> {
   try {
-    // Try fetching from users or profiles or products table
     let foundTable = '';
     let usersCount = 0;
     let productsCount = 0;
     let invoicesCount = 0;
+    let customersCount = 0;
 
     // 1. Try 'users' or 'profiles' table
     try {
@@ -85,12 +87,24 @@ export async function testSupabaseConnection(): Promise<SupabaseSyncStatus> {
       console.warn('Could not query invoices table in Supabase:', e);
     }
 
+    // 4. Try 'customers' or 'clients' table
+    try {
+      const { data: custData, error: custErr } = await supabase.from('customers').select('*').limit(50);
+      if (!custErr && custData) {
+        foundTable += 'customers ';
+        customersCount = custData.length;
+      }
+    } catch (e) {
+      console.warn('Could not query customers table in Supabase:', e);
+    }
+
     return {
       connected: true,
-      tableFound: foundTable.trim() || 'متصل بنجاح بقاعدة البيانات',
+      tableFound: foundTable.trim() || 'متصل بنجاح بقاعدة البيانات السحابية (Supabase)',
       usersCount,
       productsCount,
       invoicesCount,
+      customersCount,
       lastSyncTime: new Date().toLocaleTimeString('ar-EG'),
     };
   } catch (err: any) {
@@ -99,6 +113,84 @@ export async function testSupabaseConnection(): Promise<SupabaseSyncStatus> {
       error: err?.message || 'فشل الاتصال بقاعدة بيانات Supabase',
     };
   }
+}
+
+/**
+ * Fetch all customers from Supabase (checking 'customers' or 'clients')
+ */
+export async function fetchCustomersFromSupabase(): Promise<{ success: boolean; customers?: Customer[]; error?: string }> {
+  try {
+    let rawCustomers: any[] | null = null;
+    const { data: custData, error: cErr } = await supabase.from('customers').select('*').order('name', { ascending: true });
+    if (!cErr && custData && custData.length > 0) {
+      rawCustomers = custData;
+    } else {
+      const { data: clientData, error: clErr } = await supabase.from('clients').select('*');
+      if (!clErr && clientData && clientData.length > 0) {
+        rawCustomers = clientData;
+      }
+    }
+
+    if (rawCustomers && rawCustomers.length > 0) {
+      const mapped: Customer[] = rawCustomers.map((c: any, idx: number) => ({
+        id: c.id || `cust-${idx + 1}`,
+        code: c.code || c.customer_code || `CUST-${1000 + idx + 1}`,
+        name: c.name || c.customer_name || 'عميل بدون اسم',
+        phone: c.phone || c.mobile || '',
+        address: c.address || c.region || c.city || '',
+        branchName: c.branch_name || c.branchName || 'فرع القاهرة',
+        repName: c.rep_name || c.repName || 'مندوب المبيعات',
+        repId: c.rep_id || c.repId || '',
+        taxNumber: c.tax_number || c.taxNumber || '',
+        notes: c.notes || '',
+        createdAt: c.created_at || new Date().toISOString(),
+      }));
+      return { success: true, customers: mapped };
+    }
+
+    return { success: true, customers: [] };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'خطأ في جلب قاعدة بيانات العملاء' };
+  }
+}
+
+/**
+ * Save / Upsert Customers into Supabase
+ */
+export async function saveCustomersToSupabase(customers: Customer[]): Promise<{ success: boolean; error?: string }> {
+  try {
+    const payload = customers.map((c) => ({
+      id: c.id,
+      code: c.code,
+      name: c.name,
+      phone: c.phone,
+      address: c.address,
+      branch_name: c.branchName,
+      rep_name: c.repName,
+      rep_id: c.repId || null,
+      tax_number: c.taxNumber || null,
+      notes: c.notes || null,
+      updated_at: new Date().toISOString(),
+    }));
+
+    for (let i = 0; i < payload.length; i += 100) {
+      const chunk = payload.slice(i, i + 100);
+      const { error: err1 } = await supabase.from('customers').upsert(chunk);
+      if (err1) {
+        await supabase.from('clients').upsert(chunk);
+      }
+    }
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e?.message };
+  }
+}
+
+/**
+ * Save single Customer into Supabase
+ */
+export async function saveCustomerToSupabase(customer: Customer): Promise<{ success: boolean; error?: string }> {
+  return saveCustomersToSupabase([customer]);
 }
 
 /**
@@ -198,6 +290,7 @@ export async function saveInvoiceToSupabase(invoice: Invoice): Promise<{ success
       id: invoice.id,
       invoice_number: invoice.invoiceNumber,
       customer_name: invoice.customerName,
+      customer_code: invoice.customerCode || null,
       customer_phone: invoice.customerPhone,
       customer_address: invoice.customerAddress,
       customer_tax_number: invoice.customerTaxNumber || null,
@@ -284,6 +377,7 @@ export async function fetchInvoicesFromSupabase(): Promise<{ success: boolean; i
       const mapped: Invoice[] = rawInvoices.map((i: any) => ({
         id: i.id || `inv-${Date.now()}`,
         invoiceNumber: i.invoice_number || i.invoiceNumber || 'DRM-INV',
+        customerCode: i.customer_code || i.customerCode || undefined,
         customerName: i.customer_name || i.customerName || 'عميل',
         customerPhone: i.customer_phone || i.customerPhone || '',
         customerAddress: i.customer_address || i.customerAddress || '',
