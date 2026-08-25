@@ -859,9 +859,9 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
           {displayedProducts.map((product, idx) => {
             const isPromo = product.promoPrice && product.promoPrice > 0;
             const priorityConfig = priorityBadges[product.salesPriority];
-            const branchKey = selectedBranch === 'all' ? '' : selectedBranch;
-            const dynamicBranchStock = (product.branchStocks && branchKey && product.branchStocks[branchKey] !== undefined)
-              ? product.branchStocks[branchKey]
+            const activeBranch = selectedBranchFilter !== 'الكل' ? selectedBranchFilter : (currentUser?.branchName || '');
+            const dynamicBranchStock = (product.branchStocks && activeBranch && product.branchStocks[activeBranch] !== undefined)
+              ? product.branchStocks[activeBranch]
               : product.branchStockActual;
             const hasBranchStock = dynamicBranchStock > 0;
             const hasMainWhStock = product.mainWarehouseActual > 0;
