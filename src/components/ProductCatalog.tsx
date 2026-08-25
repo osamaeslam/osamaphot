@@ -859,9 +859,14 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
           {displayedProducts.map((product, idx) => {
             const isPromo = product.promoPrice && product.promoPrice > 0;
             const priorityConfig = priorityBadges[product.salesPriority];
-            const hasBranchStock = product.branchStockActual > 0;
+            const branchKey = selectedBranch === 'all' ? '' : selectedBranch;
+            const dynamicBranchStock = (product.branchStocks && branchKey && product.branchStocks[branchKey] !== undefined)
+              ? product.branchStocks[branchKey]
+              : product.branchStockActual;
+            const hasBranchStock = dynamicBranchStock > 0;
             const hasMainWhStock = product.mainWarehouseActual > 0;
-            const totalCartonsAvailable = Math.max(0, product.branchStockReserved) + Math.max(0, product.mainWarehouseReserved);
+            const dynamicBranchReserved = Math.max(0, dynamicBranchStock - 5);
+            const totalCartonsAvailable = Math.max(0, dynamicBranchReserved) + Math.max(0, product.mainWarehouseReserved);
             const orderState = getCardState(product.id);
 
             return (
@@ -978,17 +983,17 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
                       <div className="text-left font-black">
                         {hasBranchStock ? (
                           <span className="text-emerald-800">
-                            {product.branchStockActual} ك
+                            {dynamicBranchStock} ك
                           </span>
                         ) : (
                           <span className="text-rose-600">0</span>
                         )}
                         <span className={`text-[10px] font-black mr-1 px-1 py-0.2 rounded ${
-                          product.branchStockReserved < product.branchStockActual 
+                          dynamicBranchReserved < dynamicBranchStock 
                             ? 'bg-amber-100 text-amber-900 border border-amber-300' 
                             : 'text-slate-600'
-                        }`} title={`الفعلي: ${product.branchStockActual} | المحجوز: ${Math.max(0, product.branchStockActual - product.branchStockReserved)} | الصافي المتاح: ${Math.max(0, product.branchStockReserved)}`}>
-                          (متاح {Math.max(0, product.branchStockReserved)})
+                        }`} title={`الفعلي: ${dynamicBranchStock} | المحجوز: ${Math.max(0, dynamicBranchStock - dynamicBranchReserved)} | الصافي المتاح: ${Math.max(0, dynamicBranchReserved)}`}>
+                          (متاح {Math.max(0, dynamicBranchReserved)})
                         </span>
                       </div>
                     </div>
