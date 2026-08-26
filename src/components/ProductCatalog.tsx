@@ -283,7 +283,13 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
     if (p.branchStocks && currentActiveBranch && p.branchStocks[currentActiveBranch] !== undefined) {
       return p.branchStocks[currentActiveBranch];
     }
-    return p.branchStockActual || 0;
+    if (p.branchName && p.branchName === currentActiveBranch) {
+      return p.branchStockActual || 0;
+    }
+    if (!p.branchName) {
+      return p.branchStockActual || 0;
+    }
+    return 0;
   };
 
   // Stock Counts for Filtering
@@ -987,7 +993,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
             const activeBranch = selectedBranchFilter !== 'الكل' ? selectedBranchFilter : (currentUser?.branchName || '');
             const dynamicBranchStock = (product.branchStocks && activeBranch && product.branchStocks[activeBranch] !== undefined)
               ? product.branchStocks[activeBranch]
-              : product.branchStockActual;
+              : ((product.branchName && product.branchName === activeBranch) || !product.branchName ? product.branchStockActual : 0);
             const hasBranchStock = dynamicBranchStock > 0;
             const hasMainWhStock = product.mainWarehouseActual > 0;
             const dynamicBranchReserved = Math.max(0, dynamicBranchStock - 5);
@@ -1291,7 +1297,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
                   const activeBranch = selectedBranchFilter !== 'الكل' ? selectedBranchFilter : (currentUser?.branchName || '');
                   const branchCartons = (product.branchStocks && activeBranch && product.branchStocks[activeBranch] !== undefined)
                     ? product.branchStocks[activeBranch]
-                    : product.branchStockActual;
+                    : ((product.branchName && product.branchName === activeBranch) || !product.branchName ? product.branchStockActual : 0);
                   const branchReservedCartons = Math.max(0, branchCartons - 5);
                   const mainWhCartons = product.mainWarehouseActual;
 
