@@ -209,67 +209,59 @@ export const USER_SYNC_STORE_ID = '00000000-0000-0000-0000-000000000002';
  */
 export async function fetchUsersFromSupabase(): Promise<{ success: boolean; users?: User[]; error?: string }> {
   try {
-    // 1. Check central snapshot store in 'orders' table (shared and 100% compatible)
-    try {
-      const { data: snapData, error: snapErr } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('id', USER_SYNC_STORE_ID)
-        .limit(1);
+    const byId = new Map<string, User>();
+    const byEmail = new Map<string, User>();
+    const tableCandidates = ['app_users', 'employees', 'users', 'profiles'];
 
-      if (!snapErr && snapData && snapData.length > 0 && snapData[0].items) {
-        const rawItems = snapData[0].items;
-        const usersList: User[] = Array.isArray(rawItems)
-          ? rawItems
-          : typeof rawItems === 'string'
-          ? JSON.parse(rawItems)
-          : [];
-        if (usersList.length > 0) {
-          return { success: true, users: usersList };
-        }
-      }
-    } catch {
-      // fallback to tables
-    }
-
-    // 2. Fallback: check table candidates safely
-    const tableCandidates = ['users', 'profiles', 'employees', 'app_users'];
+    const mapUser = (u: any, tbl: string, idx: number): User => {
+      const rawEmail = String(u.email || '').trim();
+      const emailPrefix = rawEmail ? rawEmail.split('@')[0] : '';
+      return {
+        id: String(u.id || `sup-${tbl}-${idx + 1}`),
+        name: u.name || u.full_name || u.display_name || emailPrefix || 'مستخدم',
+        username: String(u.username || u.user_name || emailPrefix || `user_${idx + 1}`).trim().toLowerCase(),
+        email: rawEmail,
+        password: String(u.password || u.pass || '').trim(),
+        role: normalizeUserRole(u.role, u.is_admin),
+        branchName: u.branch_name || u.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
+        supervisorId: u.supervisor_id || u.supervisorId,
+        phone: u.phone || u.mobile || u.tel || '',
+        commissionRate: Number(u.commission_rate || u.commissionRate || 2.5),
+        isActive: u.is_active !== undefined ? Boolean(u.is_active) : true,
+        approvalStatus: u.approval_status || u.approvalStatus || 'active',
+      };
+    };
 
     for (const tbl of tableCandidates) {
       try {
         const { data, error } = await supabase.from(tbl).select('*');
-        if (!error && data && data.length > 0) {
-          const mapped: User[] = data.map((u: any, idx: number) => {
-            const rawEmail = u.email || '';
-            const emailPrefix = rawEmail ? rawEmail.split('@')[0] : '';
-            const rawName = u.name || u.full_name || u.display_name || emailPrefix || 'مستخدم';
-            const rawUsername = u.username || u.user_name || emailPrefix || `user_${idx + 1}`;
-            const rawPass = u.password || u.pass || u.code || '';
-
-            return {
-              id: String(u.id || `sup-${tbl}-${idx + 1}`),
-              name: rawName,
-              username: rawUsername.trim().toLowerCase(),
-              email: rawEmail.trim(),
-              password: String(rawPass || '').trim(),
-              role: normalizeUserRole(u.role, u.is_admin),
-              branchName: u.branch_name || u.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
-              supervisorId: u.supervisor_id || u.supervisorId,
-              phone: u.phone || u.mobile || u.tel || '',
-              commissionRate: Number(u.commission_rate || u.commissionRate || 2.5),
-              isActive: u.is_active !== undefined ? Boolean(u.is_active) : true,
-              approvalStatus: u.approval_status || u.approvalStatus || 'active',
-              createdAt: u.created_at || u.createdAt || new Date().toISOString(),
-            };
-          });
-          return { success: true, users: mapped };
-        }
+        if (error || !data) continue;
+        data.forEach((row: any, idx: number) => {
+          const user = mapUser(row, tbl, idx);
+          const existing = byId.get(user.id) || (user.email && byEmail.get(user.email.toLowerCase()));
+          byId.set(user.id, { ...existing, ...user });
+          if (user.email) byEmail.set(user.email.toLowerCase(), { ...existing, ...user });
+        });
       } catch {
-        // continue to next table
+        // جدول غير موجود أو غير مكشوف: نكمل بقية الجداول
       }
     }
 
-    return { success: false, error: 'لم يتم العثور على سجلات في جداول المستخدمين بالسحابة' };
+    // snapshot قديم؛ نستخدمه كاحتياطي فقط ولا نسمح له بإخفاء app_users.
+    try {
+      const { data } = await supabase.from('orders').select('items').eq('id', USER_SYNC_STORE_ID).limit(1);
+      const items = data?.[0]?.items;
+      const snapshot = Array.isArray(items) ? items : typeof items === 'string' ? JSON.parse(items) : [];
+      snapshot.forEach((row: any, idx: number) => {
+        const user = mapUser(row, 'snapshot', idx);
+        if (!byId.has(user.id) && (!user.email || !byEmail.has(user.email.toLowerCase()))) byId.set(user.id, user);
+      });
+    } catch {
+      // snapshot optional
+    }
+
+    const users = Array.from(byId.values());
+    return users.length > 0 ? { success: true, users } : { success: false, error: 'لم يتم العثور على مستخدمين' };
   } catch (err: any) {
     return { success: false, error: err?.message || 'خطأ في جلب المستخدمين من Supabase' };
   }
