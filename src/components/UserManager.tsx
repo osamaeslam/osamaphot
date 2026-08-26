@@ -52,20 +52,14 @@ export const UserManager: React.FC = () => {
     assignSupervisor,
     getSupervisorsInBranch,
     loginAs,
-    supabaseStatus,
-    isSupabaseSyncing,
-    syncWithSupabase,
   } = useApp();
 
   const [showAddUserModal, setShowAddUserModal] = useState(false);
-  const [showSqlSchemaModal, setShowSqlSchemaModal] = useState(false);
-  const [copiedSql, setCopiedSql] = useState(false);
   const [copiedCredentials, setCopiedCredentials] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>('الكل');
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('الكل');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState<boolean>(false);
 
   const isSuperAdminOrDev = currentUser?.role === 'admin' || currentUser?.role === 'developer';
@@ -235,15 +229,6 @@ CREATE TABLE IF NOT EXISTS public.customers (
 ALTER PUBLICATION supabase_realtime ADD TABLE public.invoices;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.products;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
-
-  const handleSyncSupabase = async (direction: 'fetch' | 'push' | 'both') => {
-    setSyncFeedback(null);
-    const res = await syncWithSupabase(direction);
-    setSyncFeedback(res.message);
-    setTimeout(() => {
-      setSyncFeedback(null), 6000;
-    });
-  };
 
   // Form State
   const [formData, setFormData] = useState<Partial<User>>({
@@ -429,64 +414,6 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
         </div>
       </div>
 
-      {/* Supabase Database Connection & Cloud Sync Card */}
-      <div className="bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 text-white rounded-3xl p-5 shadow-lg border border-slate-800 space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
-              <Database className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-black text-sm text-slate-100">قاعدة بيانات Supabase السحابية الموحدة</span>
-                <span className="bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span>متصل لحظياً</span>
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 font-mono pt-1">
-                rxthpgmlcsfckstpqhqf.supabase.co • جداول الموظفين، الفواتير، الأصناف، والعملاء
-              </p>
-            </div>
-          </div>
-
-          {/* Sync Action Buttons */}
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => setShowSqlSchemaModal(true)}
-              className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-bold px-3 py-2 rounded-xl text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
-              title="عرض ونسخ كود SQL لإنشاء وتجهيز الجداول في Supabase"
-            >
-              <Code className="w-3.5 h-3.5 text-amber-400" />
-              <span>كود SQL للجداول 📋</span>
-            </button>
-            <button
-              onClick={() => handleSyncSupabase('fetch')}
-              disabled={isSupabaseSyncing}
-              className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-black px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSupabaseSyncing ? 'animate-spin' : ''}`} />
-              <span>مزامنة الموظفين من السحابة</span>
-            </button>
-            <button
-              onClick={() => handleSyncSupabase('push')}
-              disabled={isSupabaseSyncing}
-              className="bg-slate-800 hover:bg-slate-700 border border-emerald-500/40 text-emerald-300 font-bold px-3 py-2 rounded-xl text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
-            >
-              <CloudUpload className="w-3.5 h-3.5" />
-              <span>حفظ التعديلات بالسحابة</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Sync Toast Feedback */}
-        {syncFeedback && (
-          <div className="bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-2 animate-in fade-in">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>{syncFeedback}</span>
-          </div>
-        )}
-      </div>
 
       {/* PENDING APPROVALS SECTION (Requests from register page) */}
       {pendingUsers.length > 0 && (
@@ -1248,51 +1175,6 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
               >
                 <Check className="w-4 h-4" />
                 <span>اعتماد وتفعيل الحساب فوراً</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* SQL Schema Preview & Copy Modal */}
-      {showSqlSchemaModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-3 animate-in fade-in">
-          <div className="bg-slate-900 text-white rounded-3xl max-w-2xl w-full p-6 space-y-4 shadow-2xl border border-slate-800 max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-black">
-                  <Code className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-black text-base text-slate-100">كود SQL لإنشاء جداول Supabase</h3>
-                  <p className="text-[11px] text-slate-400">انسخ الكود وشغله في محرر SQL بـ Supabase بضغطة واحدة</p>
-                </div>
-              </div>
-              <button onClick={() => setShowSqlSchemaModal(false)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 flex-1 overflow-y-auto font-mono text-xs text-emerald-400 dir-ltr text-left select-all">
-              <pre className="whitespace-pre-wrap">{supabaseSqlScript}</pre>
-            </div>
-
-            <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800">
-              <span className="text-xs text-slate-400">
-                الجداول: users, products, invoices, customers
-              </span>
-              <button
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(supabaseSqlScript);
-                    setCopiedSql(true);
-                    setTimeout(() => setCopiedSql(false), 2500);
-                  } catch (e) {}
-                }}
-                className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
-              >
-                {copiedSql ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                <span>{copiedSql ? 'تم النسخ بنجاح! ✅' : 'نسخ كود SQL بالكامل 📋'}</span>
               </button>
             </div>
           </div>
