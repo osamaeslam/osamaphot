@@ -820,7 +820,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .toLowerCase()
         .replace(/[أإآ]/g, 'ا')
         .replace(/ة/g, 'ه')
-        .replace(/��/g, 'ي')
+        .replace(/����/g, 'ي')
         .replace(/ؤ/g, 'و')
         .replace(/ئ/g, 'ي')
         .replace(/ء/g, '')
@@ -1754,7 +1754,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         estimatedGrandTotal: shortageTotals.estimatedGrandTotal,
         paymentMethod: orderData.paymentMethod || 'نقدي (كاش)',
         status: 'قيد مراجعة المشرف',
-        notes: `فاتورة تحويل نواقص تابعة للفاتورة الأساسية #${newInvoiceNumber}`,
+        notes: `��اتورة تحويل نواقص تابعة للفاتورة الأساسية #${newInvoiceNumber}`,
         syncedToAccounting: false,
         isShortageInvoice: true,
         parentInvoiceId: primaryInvoice.id,
@@ -1921,8 +1921,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'الطلبية معتمدة ومصروفة بالفعل' };
     }
 
-    // Deduct physical stock only at approval: branch first, then central warehouse.
-    // The whole approval is rejected before any state changes if one item cannot be fulfilled.
+  // Deduct physical stock only after the supervisor explicitly clicks approve & dispatch:
+  // branch first, then central warehouse. Drafts and pending orders never deduct stock.
+  // If one item cannot be fulfilled, this manual approval is rejected before any state changes.
     const allocations = new Map<string, { branch: number; main: number }>();
     for (const invItem of inv.items) {
       const product = products.find((p) => p.id === invItem.productId);
