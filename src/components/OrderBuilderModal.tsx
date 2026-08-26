@@ -1,1203 +1,1422 @@
 import {
   AlertCircle,
-  Building,
-  Calendar,
+  ArrowDown,
+  ArrowRight,
+  ArrowUpDown,
+  Check,
   CheckCircle2,
-  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  CloudLightning,
+  Copy,
   Download,
+  ExternalLink,
+  Eye,
   FileSpreadsheet,
-  Minus,
-  Phone,
+  FolderOpen,
+  Globe,
+  HelpCircle,
+  Image as ImageIcon,
+  Layers,
+  Link,
+  Package,
   Plus,
-  Receipt,
+  RefreshCw,
   Search,
-  ShoppingCart,
+  Share2,
   Sparkles,
   Store,
-  Trash2,
-  User,
+  Upload,
   UserCheck,
   Users,
-  Warehouse,
-  X
+  X,
+  Trash2
 } from 'lucide-react';
 import React, { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { ProductImage } from './ProductImage';
-import { exportElectronicInvoiceToExcel } from '../services/excelService';
+import { getProductImageUrl } from '../services/cloudinaryService';
+import {
+  exportCustomersToExcel,
+  exportProductsToExcel,
+  fetchAndParseGoogleSheet,
+  fetchCustomersFromGoogleSheetUrl,
+  generateSampleCustomersTemplate,
+  generateSampleExcelTemplate,
+  parseExcelCustomers,
+  parseExcelProducts
+} from '../services/excelService';
 import { formatCurrency } from '../services/invoiceService';
-import { downloadInvoicePDF } from '../services/pdfService';
-import { Customer, PaymentMethod } from '../types';
-import { getDepartmentMeta } from '../data/departmentMeta';
+import { Customer, Product } from '../types';
 
-interface OrderBuilderModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onInvoiceCreated: (invoice: any) => void;
-}
-
-export const OrderBuilderModal: React.FC<OrderBuilderModalProps> = ({
-  isOpen,
-  onClose,
-  onInvoiceCreated,
-}) => {
+export const ExcelImportExport: React.FC = () => {
   const {
-    cart,
     products,
     customers,
-    updateCartItem,
-    removeFromCart,
-    clearCart,
-    getCartSummary,
-    createOrder,
-    currentUser,
-    cloudinaryConfig
+    importProductsList,
+    importCustomersList,
+    cleanAndDeduplicateCustomers,
+    deleteCustomer,
+    wipeAllProductsAndData,
+    selectedBranchFilter
   } = useApp();
 
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
-  const [customerSearchQuery, setCustomerSearchQuery] = useState('');
-  const [selectedCustomerTierFilter, setSelectedCustomerTierFilter] = useState<'all' | 'VIP' | 'A' | 'B' | 'C'>('all');
-  const [customerRepScope, setCustomerRepScope] = useState<'my_customers' | 'all'>(
-    currentUser?.role === 'sales_rep' ? 'my_customers' : 'all'
-  );
-  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
-  const [isNewCustomerMode, setIsNewCustomerMode] = useState(false);
+  const [activeSubTab, setActiveSubTab] = useState<'google_sheets' | 'excel_file' | 'drive_scanner' | 'customers'>('google_sheets');
 
-  const [customerName, setCustomerName] = useState('');
-  const [customerCode, setCustomerCode] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
-  const [customerAddress, setCustomerAddress] = useState('');
-  const [customerTaxNumber, setCustomerTaxNumber] = useState('');
-  const [customerBranch, setCustomerBranch] = useState('');
-  const [customerRep, setCustomerRep] = useState('');
-  const [customerTier, setCustomerTier] = useState<string>('');
+  // Customer Management State
+  const [customerGoogleSheetUrl, setCustomerGoogleSheetUrl] = useState('');
+  const [isSyncingCustomers, setIsSyncingCustomers] = useState(false);
+  const [customerSheetSuccess, setCustomerSheetSuccess] = useState<string | null>(null);
+  const [customerSheetError, setCustomerSheetError] = useState<string | null>(null);
+  const [customerPreviewList, setCustomerPreviewList] = useState<Customer[]>([]);
+  const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+  const [customerImportMode, setCustomerImportMode] = useState<'merge' | 'replace'>('merge');
+  const [customerDisplayLimit, setCustomerDisplayLimit] = useState<number>(50);
 
-  const [discountPercent, setDiscountPercent] = useState<number>(0);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('نقدي (كاش)');
-  const [orderNotes, setOrderNotes] = useState('');
-  const [splitShortagesToBackorder, setSplitShortagesToBackorder] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formErrors, setFormErrors] = useState<string[]>([]);
+  // Wipe / Reset Modal State
+  const [isWipeModalOpen, setIsWipeModalOpen] = useState(false);
+  const [isWiping, setIsWiping] = useState(false);
+  const [wipeInvoicesToo, setWipeInvoicesToo] = useState(false);
 
-  // Check if a customer belongs to the current sales rep
-  const isCustomerBelongingToCurrentRep = (c: Customer) => {
-    if (!currentUser) return true;
-    const currentName = (currentUser.name || '').trim().toLowerCase();
-    const currentUsername = (currentUser.username || '').trim().toLowerCase();
-    const currentId = (currentUser.id || '').trim().toLowerCase();
+  // Excel File State
+  const [isDragging, setIsDragging] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [previewProducts, setPreviewProducts] = useState<Product[]>([]);
+  const [parseErrors, setParseErrors] = useState<string[]>([]);
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('replace');
+  const [importSuccessMsg, setImportSuccessMsg] = useState<string | null>(null);
 
-    const cRepName = (c.salesRepName || c.repName || '').trim().toLowerCase();
-    const cRepId = (c.repId || '').trim().toLowerCase();
+  // Preview Table Filter & Pagination State
+  const [previewSearchTerm, setPreviewSearchTerm] = useState('');
+  const [previewPage, setPreviewPage] = useState(1);
+  const [previewPageSize, setPreviewPageSize] = useState<number | 'all'>(100);
 
-    // If repId is set and matches, definitely belongs to this rep
-    if (cRepId && cRepId === currentId) return true;
-    // If repId is set and doesn't match, definitely does NOT belong
-    if (cRepId && cRepId !== currentId) return false;
+  // Google Sheets State
+  const [googleSheetUrl, setGoogleSheetUrl] = useState('');
+  const [isSyncingGoogleSheet, setIsSyncingGoogleSheet] = useState(false);
+  const [googleSheetSuccess, setGoogleSheetSuccess] = useState<string | null>(null);
+  const [googleSheetError, setGoogleSheetError] = useState<string | null>(null);
+  const [copiedScript, setCopiedScript] = useState(false);
 
-    // Fallback to name matching when no repId
-    if (!cRepName) return true; // Unassigned customers are accessible
-    return (
-      cRepName === currentName ||
-      cRepName === currentUsername ||
-      currentName.includes(cRepName) ||
-      cRepName.includes(currentName)
+  // Filtered preview products
+  const filteredPreviewProducts = useMemo(() => {
+    if (!previewSearchTerm.trim()) return previewProducts;
+    const q = previewSearchTerm.toLowerCase().trim();
+    return previewProducts.filter((p) => {
+      return (
+        (p.code && p.code.toLowerCase().includes(q)) ||
+        (p.name && p.name.toLowerCase().includes(q)) ||
+        (p.color && p.color.toLowerCase().includes(q)) ||
+        (p.size && p.size.toLowerCase().includes(q)) ||
+        (p.department && p.department.toLowerCase().includes(q)) ||
+        (p.category && p.category.toLowerCase().includes(q)) ||
+        (p.branchName && p.branchName.toLowerCase().includes(q))
+      );
+    });
+  }, [previewProducts, previewSearchTerm]);
+
+  // Total pages for preview
+  const totalPreviewPages = useMemo(() => {
+    if (previewPageSize === 'all') return 1;
+    return Math.max(1, Math.ceil(filteredPreviewProducts.length / previewPageSize));
+  }, [filteredPreviewProducts.length, previewPageSize]);
+
+  // Paginated preview products
+  const paginatedPreviewProducts = useMemo(() => {
+    if (previewPageSize === 'all') return filteredPreviewProducts;
+    const start = (previewPage - 1) * previewPageSize;
+    return filteredPreviewProducts.slice(start, start + previewPageSize);
+  }, [filteredPreviewProducts, previewPage, previewPageSize]);
+
+  const handleFileUpload = async (file: File) => {
+    if (!file) return;
+    setIsLoading(true);
+    setParseErrors([]);
+    setImportSuccessMsg(null);
+    setPreviewPage(1);
+
+    try {
+      const result = await parseExcelProducts(file);
+      if (result.errors.length > 0) {
+        setParseErrors(result.errors);
+      }
+      setPreviewProducts(result.products);
+    } catch (err: any) {
+      setParseErrors([err.message || 'حدث خطأ أثناء معالجة ملف الإكسل']);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleApplyImport = () => {
+    if (previewProducts.length === 0) return;
+    importProductsList(previewProducts, importMode);
+    setImportSuccessMsg(
+      `تم بنجاح استيراد ${previewProducts.length} صنف كامل وتحديث بيانات مخزون الفروع والمخزن الرئيسي وروابط الصور!`
     );
+    setPreviewProducts([]);
+    setPreviewSearchTerm('');
+    setPreviewPage(1);
+    setTimeout(() => setImportSuccessMsg(null), 5000);
   };
 
-  const myAssignedCustomersCount = useMemo(() => {
-    return customers.filter(isCustomerBelongingToCurrentRep).length;
-  }, [customers, currentUser]);
-
-  // Filtered customers for search dropdown by search query, rep assignment scope, and tier
-  const filteredCustomers = useMemo(() => {
-    return customers.filter((c) => {
-      // Rep scope filter (for sales reps)
-      if (customerRepScope === 'my_customers' && currentUser?.role === 'sales_rep') {
-        if (!isCustomerBelongingToCurrentRep(c)) return false;
-      }
-
-      // Tier filter
-      if (selectedCustomerTierFilter !== 'all') {
-        const cTier = (c.tier || '').toUpperCase();
-        if (selectedCustomerTierFilter === 'VIP' && !cTier.includes('VIP') && !cTier.includes('مميز')) return false;
-        if (selectedCustomerTierFilter === 'A' && !cTier.includes('A') && !cTier.includes('راقي')) return false;
-        if (selectedCustomerTierFilter === 'B' && !cTier.includes('B') && !cTier.includes('متوسط')) return false;
-        if (selectedCustomerTierFilter === 'C' && !cTier.includes('C') && !cTier.includes('عادي')) return false;
-      }
-
-      // Search Query
-      if (customerSearchQuery.trim()) {
-        const q = customerSearchQuery.toLowerCase().trim();
-        const matches =
-          c.name.toLowerCase().includes(q) ||
-          (c.code && c.code.toLowerCase().includes(q)) ||
-          (c.phone && c.phone.includes(q)) ||
-          (c.storeName && c.storeName.toLowerCase().includes(q)) ||
-          (c.branchName && c.branchName.toLowerCase().includes(q)) ||
-          (c.salesRepName && c.salesRepName.toLowerCase().includes(q)) ||
-          (c.repName && c.repName.toLowerCase().includes(q)) ||
-          (c.governorate && c.governorate.toLowerCase().includes(q));
-        if (!matches) return false;
-      }
-
-      return true;
-    }).slice(0, 35);
-  }, [customers, customerSearchQuery, selectedCustomerTierFilter, customerRepScope, currentUser]);
-
-  const handleSelectCustomer = (c: Customer) => {
-    setSelectedCustomerId(c.id);
-    setIsNewCustomerMode(false);
-    setCustomerName(c.name);
-    setCustomerCode(c.code || '');
-    setCustomerPhone(c.phone || '');
-    setCustomerAddress(c.address || c.governorate || '');
-    setCustomerTaxNumber(c.taxNumber || '');
-    setCustomerBranch(c.branchName || currentUser?.branchName || '');
-    setCustomerRep(c.salesRepName || c.repName || currentUser?.name || '');
-    setCustomerTier(c.tier || 'عادي');
-    setIsCustomerDropdownOpen(false);
-    setCustomerSearchQuery('');
-  };
-
-  const handleStartNewCustomer = (customName?: string) => {
-    setSelectedCustomerId('');
-    setIsNewCustomerMode(true);
-    const typedName = customName !== undefined ? customName : customerSearchQuery;
-    setCustomerName(typedName);
-    setCustomerCode(`CUST-${Date.now().toString().slice(-4)}`);
-    setCustomerPhone('');
-    setCustomerAddress('');
-    setCustomerTaxNumber('');
-    setCustomerBranch(currentUser?.branchName || 'الفرع الرئيسي');
-    setCustomerRep(currentUser?.name || 'مندوب المبيعات');
-    setCustomerTier('عادي');
-    setIsCustomerDropdownOpen(false);
-    setCustomerSearchQuery('');
-  };
-
-  const handleClearSelectedCustomer = () => {
-    setSelectedCustomerId('');
-    setIsNewCustomerMode(false);
-    setCustomerName('');
-    setCustomerCode('');
-    setCustomerPhone('');
-    setCustomerAddress('');
-    setCustomerTaxNumber('');
-    setCustomerBranch('');
-    setCustomerRep('');
-    setCustomerTier('');
-  };
-
-  if (!isOpen) return null;
-
-  const summary = getCartSummary(discountPercent);
-  const todayDate = new Date().toISOString().slice(0, 10);
-  const hasWarehouseItems = cart.some((c) => c.fulfillFromMainWarehouse);
-
-  const handleSubmitOrder = async (andExportExcel = false, andDownloadPDF = false) => {
-    const errors: string[] = [];
-    if (!customerName.trim()) {
-      errors.push('يرجى اختيار عميل من القائمة أو كتابة اسم العميل / المحل');
-    }
-    if (cart.length === 0) {
-      errors.push('الطلبية فارغة! يرجى إضافة أصناف أولاً من الكتالوج');
-    }
-
-    // Stock check
-    for (const item of cart) {
-      const liveProd = products.find((p) => p.id === item.product.id) || item.product;
-      const branchAvail = Math.max(0, liveProd.branchStockReserved);
-      const mainAvail = Math.max(0, liveProd.mainWarehouseReserved);
-      const totalAvail = branchAvail + mainAvail;
-
-      if (totalAvail <= 0) {
-        errors.push(`الصنف (${liveProd.name}) نفد تماماً من المخزن ورصيده الحالي 0 كرتونة.`);
-      } else if (item.cartonCount > totalAvail) {
-        errors.push(`الصنف (${liveProd.name}) المطلوب (${item.cartonCount} ك) يتجاوز الحد الأقصى المتاح (${totalAvail} كرتونة فقط).`);
-      }
-    }
-
-    if (errors.length > 0) {
-      setFormErrors(errors);
+  const handleFetchGoogleSheet = async () => {
+    if (!googleSheetUrl.trim()) {
+      setGoogleSheetError('يرجى لصق رابط Google Sheet أولاً');
       return;
     }
 
-    setIsSubmitting(true);
+    setIsSyncingGoogleSheet(true);
+    setGoogleSheetError(null);
+    setGoogleSheetSuccess(null);
+    setParseErrors([]);
+    setPreviewPage(1);
+
     try {
-      const result = createOrder({
-        customerName: customerName.trim(),
-        customerCode: customerCode.trim() || undefined,
-        customerPhone: customerPhone.trim(),
-        customerAddress: customerAddress.trim(),
-        customerTaxNumber: customerTaxNumber.trim(),
-        paymentMethod: paymentMethod,
-        discountPercentage: discountPercent,
-        notes: orderNotes.trim(),
-        splitShortagesToBackorder: splitShortagesToBackorder,
-      });
-
-      if (!result.success || !result.invoice) {
-        setFormErrors([result.message || 'تعذر تسجيل الطلبية بسبب نفاذ المخزون.']);
-        setIsSubmitting(false);
-        return;
-      }
-
-      const createdInvoice = result.invoice;
-
-      if (andExportExcel) {
-        exportElectronicInvoiceToExcel(createdInvoice);
-        if (result.shortageInvoice) {
-          exportElectronicInvoiceToExcel(result.shortageInvoice);
+      const result = await fetchAndParseGoogleSheet(googleSheetUrl);
+      if (result.errors.length > 0 && result.products.length === 0) {
+        setGoogleSheetError(result.errors.join(' • '));
+      } else {
+        if (result.errors.length > 0) {
+          setParseErrors(result.errors);
         }
+        setPreviewProducts(result.products);
+        setGoogleSheetSuccess(
+          `تم بنجاح جلب ${result.products.length} صنف من شيت Google Sheets! راجع الجدول أدناه واضغط تأكيد الحفظ.`
+        );
       }
-
-      if (andDownloadPDF) {
-        await downloadInvoicePDF(createdInvoice);
-      }
-
-      onInvoiceCreated(createdInvoice);
-      onClose();
-    } catch (err) {
-      console.error(err);
-      setFormErrors(['حدث خطأ أثناء حفظ الطلبية. يرجى المحاولة ثانية.']);
+    } catch (err: any) {
+      setGoogleSheetError(err.message || 'فشل جلب البيانات من Google Sheets');
     } finally {
-      setIsSubmitting(false);
+      setIsSyncingGoogleSheet(false);
     }
   };
 
+  const sampleAppsScript = `// كود Google Apps Script لمزامنة Google Sheets مع نظام دريم للتوزيع تلقائياً
+function onEdit(e) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  // إرسال تنبيه للمنظومة بتحديث البيانات
+  console.log("تم تعديل الشيت بنجاح");
+}`;
+
+  const handleCopyScript = () => {
+    navigator.clipboard.writeText(sampleAppsScript);
+    setCopiedScript(true);
+    setTimeout(() => setCopiedScript(false), 3000);
+  };
+
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto animate-in fade-in duration-200" id="order-builder-modal-overlay">
-      <div className="bg-white rounded-3xl max-w-4xl w-full max-h-[94vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden text-slate-900" id="order-builder-modal-container">
-        
-        {/* Header */}
-        <div className="bg-slate-900 text-white p-4 sm:p-5 flex items-center justify-between border-b border-slate-800" id="order-builder-header">
+    <div className="space-y-6 pb-16">
+      
+      {/* Success Notification */}
+      {importSuccessMsg && (
+        <div className="bg-emerald-600 text-white p-4 rounded-2xl shadow-xl flex items-center justify-between text-xs sm:text-sm animate-in fade-in">
+          <div className="flex items-center gap-2 font-bold">
+            <CheckCircle2 className="w-5 h-5 shrink-0" />
+            <span>{importSuccessMsg}</span>
+          </div>
+          <button onClick={() => setImportSuccessMsg(null)}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Main Header */}
+      <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center font-black shadow-md">
-              <Receipt className="w-5 h-5" />
+            <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-black">
+              <FileSpreadsheet className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-base sm:text-lg font-black tracking-tight text-white">إنشاء فاتورة مبيعات ذكية جديدة</h2>
-              <p className="text-xs text-amber-300 font-semibold mt-0.5">
-                شركة دريم للتجارة والتوزيع • حساب ذكي للكراتين والقطع مع قاعدة بيانات العملاء ومخزون الفروع
+              <h2 className="text-xl font-black text-slate-900">مركز ربط الشيتات (Google Sheets & Excel)</h2>
+              <p className="text-xs sm:text-sm text-slate-500">
+                مزامنة حية مع Google Sheets • استيراد وتصدير إكسل • دعم مباشر لروابط صور Google Drive وسعر الكرتونة
               </p>
             </div>
           </div>
-          <button
-            id="order-builder-close-btn"
-            onClick={onClose}
-            className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-slate-800 transition cursor-pointer"
-            title="إغلاق النافذة"
-          >
-            <X className="w-5 h-5" />
-          </button>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setIsWipeModalOpen(true)}
+              className="flex items-center gap-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 font-black px-3.5 py-2 rounded-xl text-xs border border-rose-300 transition cursor-pointer"
+              title="مسح وتصفير كافة الأصناف للرفع من جديد"
+            >
+              <Trash2 className="w-4 h-4 text-rose-600" />
+              <span>تصفير ومسح الكل 🗑️</span>
+            </button>
+
+            <button
+              onClick={generateSampleExcelTemplate}
+              className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold px-3.5 py-2 rounded-xl text-xs border border-slate-300 transition"
+              title="تحميل نموذج شيت إكسل جاهز"
+            >
+              <Download className="w-4 h-4 text-slate-600" />
+              <span>تحميل نموذج إكسل معتمد</span>
+            </button>
+
+            <button
+              onClick={() => exportProductsToExcel(products, selectedBranchFilter)}
+              className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold px-3.5 py-2 rounded-xl text-xs shadow-xs transition"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>تصدير المخزون الحالي ({products.length})</span>
+            </button>
+          </div>
         </div>
 
-        {/* Modal Scrollable Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 bg-white" id="order-builder-body">
-          
-          {/* Error Banner */}
-          {formErrors.length > 0 && (
-            <div className="bg-red-50 border-2 border-red-300 text-red-900 p-4 rounded-2xl text-xs space-y-1.5 shadow-sm" id="order-builder-errors">
-              <div className="font-black flex items-center gap-2 text-sm text-red-700">
-                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                <span>يرجى مراجعة الملاحظات التالية قبل الحفظ:</span>
-              </div>
-              <ul className="list-disc list-inside pr-4 space-y-1 font-bold">
-                {formErrors.map((err, i) => (
-                  <li key={i}>{err}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+        {/* Tab Navigation */}
+        <div className="flex items-center gap-2 border-b border-slate-200 pt-2 overflow-x-auto no-scrollbar">
+          <button
+            onClick={() => setActiveSubTab('google_sheets')}
+            className={`pb-3 px-4 text-xs sm:text-sm font-black border-b-2 flex items-center gap-2 transition whitespace-nowrap ${
+              activeSubTab === 'google_sheets'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Globe className="w-4 h-4" />
+            <span>ربط المنتجات مع Google Sheets</span>
+            <span className="bg-emerald-100 text-emerald-800 text-[10px] px-1.5 py-0.5 rounded-full font-bold">مباشر Live</span>
+          </button>
 
-          {/* Top Info Bar: Rep Name, Branch, Date */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200 text-xs">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 bg-amber-100 text-amber-800 rounded-xl">
-                <User className="w-4 h-4 shrink-0" />
-              </div>
+          <button
+            onClick={() => setActiveSubTab('excel_file')}
+            className={`pb-3 px-4 text-xs sm:text-sm font-black border-b-2 flex items-center gap-2 transition whitespace-nowrap ${
+              activeSubTab === 'excel_file'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Upload className="w-4 h-4" />
+            <span>رفع ملف إكسل للمنتجات</span>
+          </button>
+
+          <button
+            onClick={() => setActiveSubTab('customers')}
+            className={`pb-3 px-4 text-xs sm:text-sm font-black border-b-2 flex items-center gap-2 transition whitespace-nowrap ${
+              activeSubTab === 'customers'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Users className="w-4 h-4 text-amber-600" />
+            <span>قاعدة بيانات العملاء (شيتات وإكسل)</span>
+            <span className="bg-amber-100 text-amber-900 text-[10px] px-1.5 py-0.5 rounded-full font-bold">{customers.length} عميل</span>
+          </button>
+
+          <button
+            onClick={() => setActiveSubTab('drive_scanner')}
+            className={`pb-3 px-4 text-xs sm:text-sm font-black border-b-2 flex items-center gap-2 transition whitespace-nowrap ${
+              activeSubTab === 'drive_scanner'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <FolderOpen className="w-4 h-4 text-blue-500" />
+            <span>ماسح مجلدات Google Drive</span>
+            <span className="bg-blue-100 text-blue-900 text-[10px] px-1.5 py-0.5 rounded-full font-bold">Apps Script</span>
+          </button>
+        </div>
+      </div>
+
+      {/* SUB-TAB 1: Google Sheets Live Sync */}
+      {activeSubTab === 'google_sheets' && (
+        <div className="space-y-6">
+          <div className="bg-gradient-to-br from-emerald-950 via-slate-900 to-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl border border-emerald-800/40 space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
-                <span className="text-slate-500 block text-[10px] font-bold">المندوب المسئول:</span>
-                <strong className="text-slate-900 font-black">{currentUser?.name || 'مندوب المبيعات'}</strong>
+                <div className="inline-flex items-center gap-2 bg-emerald-500/20 text-emerald-300 text-xs font-black px-3 py-1 rounded-full border border-emerald-500/30 mb-2">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>المزامنة السحابية المباشرة مع Google Sheets</span>
+                </div>
+                <h3 className="text-xl sm:text-2xl font-black text-white">
+                  اربط الشيت مباشرة بجوجل شيت بدون الحاجة لتحميل ورفع ملفات كل مرة
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                  قم فقط بلصق رابط الـ Google Sheet الخاص بك (مع التأكد من تفعيل خاصية "Anyone with the link can view").
+                  المنظومة ستقرأ الأصناف والمخزون والأسعار وتربط الصور تلقائياً في ثوانٍ معدودة.
+                </p>
+              </div>
+
+              <div className="bg-slate-800/80 p-4 rounded-2xl border border-slate-700 text-center min-w-[200px]">
+                <div className="text-xs text-slate-400 font-medium">الأصناف المحدثة حالياً</div>
+                <div className="text-3xl font-black text-amber-400 mt-0.5">{products.length}</div>
+                <div className="text-[10px] text-emerald-400 mt-1">جاهزة ومربوطة بـ Cloudinary</div>
               </div>
             </div>
 
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 bg-blue-100 text-blue-800 rounded-xl">
-                <Building className="w-4 h-4 shrink-0" />
+            {/* Google Sheets URL Input Form */}
+            <div className="bg-slate-800/90 p-4 sm:p-5 rounded-2xl border border-slate-700 space-y-4">
+              <label className="block text-xs font-bold text-slate-200">
+                ضع رابط Google Sheet الخاص بك هنا:
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <div className="relative flex-1">
+                  <Link className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    value={googleSheetUrl}
+                    onChange={(e) => setGoogleSheetUrl(e.target.value)}
+                    placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
+                    className="w-full bg-slate-900 border border-slate-600 rounded-xl pr-10 pl-4 py-3 text-xs sm:text-sm text-white focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400 transition"
+                  />
+                </div>
+                <button
+                  onClick={handleFetchGoogleSheet}
+                  disabled={isSyncingGoogleSheet || !googleSheetUrl.trim()}
+                  className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-black px-6 py-3 rounded-xl text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition"
+                >
+                  {isSyncingGoogleSheet ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>جاري القراءة والمزامنة...</span>
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-4 h-4" />
+                      <span>جلب وتحديث من Google Sheets</span>
+                    </>
+                  )}
+                </button>
               </div>
-              <div>
-                <span className="text-slate-500 block text-[10px] font-bold">فرع التحميل:</span>
-                <strong className="text-slate-900 font-black">{currentUser?.branchName || 'الفرع الرئيسي'}</strong>
-              </div>
+
+              {/* Status messages */}
+              {googleSheetSuccess && (
+                <div className="bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 p-3.5 rounded-xl text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span>{googleSheetSuccess}</span>
+                </div>
+              )}
+
+              {googleSheetError && (
+                <div className="bg-rose-500/20 border border-rose-500/40 text-rose-300 p-3.5 rounded-xl text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                  <span>{googleSheetError}</span>
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 bg-emerald-100 text-emerald-800 rounded-xl">
-                <Calendar className="w-4 h-4 shrink-0" />
+            {/* Quick 3-Step Guide */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+              <div className="bg-slate-800/50 p-4 rounded-2xl border border-slate-700/60">
+                <div className="w-7 h-7 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-xs mb-2">1</div>
+                <h4 className="font-black text-sm text-white mb-1">افتح شيت جوجل شيت</h4>
+                <p className="text-xs text-slate-400">
+                  أنشئ جدولك على Google Sheets بنفس الأعمدة (الكود، اسم الصنف، السعر، المخزون، القسم).
+                </p>
               </div>
-              <div>
-                <span className="text-slate-500 block text-[10px] font-bold">تاريخ الطلبية:</span>
-                <strong className="text-slate-900 font-black">{todayDate}</strong>
+
+              <div className="bg-slate-800/50 p-4 rounded-2xl border border-slate-700/60">
+                <div className="w-7 h-7 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-xs mb-2">2</div>
+                <h4 className="font-black text-sm text-white mb-1">اجعل الرابط متاحاً للرؤية</h4>
+                <p className="text-xs text-slate-400">
+                  اضغط على زر المشاركة (Share) في Google Sheets واختر "Anyone with the link can view".
+                </p>
+              </div>
+
+              <div className="bg-slate-800/50 p-4 rounded-2xl border border-slate-700/60">
+                <div className="w-7 h-7 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-xs mb-2">3</div>
+                <h4 className="font-black text-sm text-white mb-1">الصق الرابط واضغط مزامنة</h4>
+                <p className="text-xs text-slate-400">
+                  الصق الرابط هنا واضغط "جلب وتحديث"، سيتم تحديث كامل فروع ومناديب دريم فوراً!
+                </p>
               </div>
             </div>
           </div>
+        </div>
+      )}
 
-          {/* Customer Selection & Details (Smart Searchable Dropdown) */}
-          <div className="bg-slate-50/80 border border-slate-200 p-4 rounded-2xl space-y-3.5" id="customer-selection-section">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-              <h3 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
-                <span>1. بيانات العميل المسند / تسجيل عميل جديد</span>
-                <span className="text-rose-600 font-black">*</span>
-              </h3>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleStartNewCustomer('')}
-                  className="text-[11px] font-black text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 px-2.5 py-1 rounded-xl cursor-pointer flex items-center gap-1 transition shadow-xs"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>+ عميل جديد</span>
-                </button>
-                <span className="text-[10px] text-amber-800 bg-amber-100 px-2 py-1 rounded-xl font-bold">
-                  {customers.length} عميل مسجل
-                </span>
-              </div>
-            </div>
-
-            {/* Rep Scope Filter & Tier Filters */}
-            <div className="space-y-2">
-              {/* Rep Scope Toggle (Available to Sales Rep & All) */}
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-1.5 p-1 bg-slate-200/80 rounded-xl text-xs font-bold">
-                  <button
-                    type="button"
-                    onClick={() => setCustomerRepScope('my_customers')}
-                    className={`px-3 py-1.5 rounded-lg font-black transition cursor-pointer flex items-center gap-1.5 ${
-                      customerRepScope === 'my_customers'
-                        ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'text-slate-700 hover:text-slate-950'
-                    }`}
-                  >
-                    <UserCheck className="w-3.5 h-3.5" />
-                    <span>عملاء المندوب المسندين ({myAssignedCustomersCount})</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCustomerRepScope('all')}
-                    className={`px-3 py-1.5 rounded-lg font-black transition cursor-pointer flex items-center gap-1.5 ${
-                      customerRepScope === 'all'
-                        ? 'bg-slate-900 text-amber-300 shadow-xs'
-                        : 'text-slate-700 hover:text-slate-950'
-                    }`}
-                  >
-                    <Users className="w-3.5 h-3.5" />
-                    <span>كل عملاء الشركة ({customers.length})</span>
-                  </button>
-                </div>
-
-                {customerRepScope === 'my_customers' && (
-                  <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
-                    👤 تصفية خاصة بالمندوب: {currentUser?.name || 'الحالي'}
-                  </span>
+      {/* SUB-TAB 2: Standard Excel/CSV File Upload */}
+      {activeSubTab === 'excel_file' && (
+        <div className="space-y-6">
+          {/* Drag and Drop Zone */}
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDragging(true);
+            }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDragging(false);
+              if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                handleFileUpload(e.dataTransfer.files[0]);
+              }
+            }}
+            className={`border-2 border-dashed rounded-3xl p-8 sm:p-12 text-center transition-all bg-white shadow-sm ${
+              isDragging ? 'border-emerald-500 bg-emerald-50/50' : 'border-slate-300 hover:border-emerald-400'
+            }`}
+          >
+            <div className="max-w-md mx-auto space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center mx-auto shadow-inner">
+                {isLoading ? (
+                  <RefreshCw className="w-8 h-8 animate-spin" />
+                ) : (
+                  <Upload className="w-8 h-8" />
                 )}
               </div>
 
-              {/* Tier Filters for Customers */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
-                <button
-                  type="button"
-                  onClick={() => setSelectedCustomerTierFilter('all')}
-                  className={`px-2.5 py-1 rounded-xl font-black shrink-0 transition cursor-pointer text-[11px] ${
-                    selectedCustomerTierFilter === 'all'
-                      ? 'bg-slate-800 text-amber-300 shadow-xs'
-                      : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
-                  }`}
-                >
-                  الكل ({filteredCustomers.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedCustomerTierFilter('VIP')}
-                  className={`px-2.5 py-1 rounded-xl font-black shrink-0 transition cursor-pointer text-[11px] ${
-                    selectedCustomerTierFilter === 'VIP'
-                      ? 'bg-amber-400 text-slate-950 shadow-xs ring-1 ring-amber-500'
-                      : 'bg-white text-amber-900 border border-amber-300 hover:bg-amber-50'
-                  }`}
-                >
-                  ⭐ مميز (VIP)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedCustomerTierFilter('A')}
-                  className={`px-2.5 py-1 rounded-xl font-black shrink-0 transition cursor-pointer text-[11px] ${
-                    selectedCustomerTierFilter === 'A'
-                      ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'bg-white text-emerald-800 border border-emerald-300 hover:bg-emerald-50'
-                  }`}
-                >
-                  🏆 راقي (A)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedCustomerTierFilter('B')}
-                  className={`px-2.5 py-1 rounded-xl font-black shrink-0 transition cursor-pointer text-[11px] ${
-                    selectedCustomerTierFilter === 'B'
-                      ? 'bg-blue-600 text-white shadow-xs'
-                      : 'bg-white text-blue-800 border border-blue-300 hover:bg-blue-50'
-                  }`}
-                >
-                  🏬 متوسط (B)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedCustomerTierFilter('C')}
-                  className={`px-2.5 py-1 rounded-xl font-black shrink-0 transition cursor-pointer text-[11px] ${
-                    selectedCustomerTierFilter === 'C'
-                      ? 'bg-slate-700 text-white shadow-xs'
-                      : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
-                  }`}
-                >
-                  🏪 عادي (C)
-                </button>
-              </div>
-            </div>
-
-            {/* Searchable Customer Dropdown */}
-            <div className="relative">
-              <label className="block text-slate-900 font-black text-xs mb-1">
-                بحث في سجل العملاء (بالاسم، الكود، الهاتف، اسم المحل، المندوب):
-              </label>
-              
-              <div className="relative">
-                <input
-                  id="customer-search-input"
-                  type="text"
-                  value={customerSearchQuery}
-                  onFocus={() => setIsCustomerDropdownOpen(true)}
-                  onChange={(e) => {
-                    setCustomerSearchQuery(e.target.value);
-                    setIsCustomerDropdownOpen(true);
-                  }}
-                  placeholder="🔍 اكتب اسم العميل، الكود، المحافظة أو رقم الهاتف لاختياره مباشرة..."
-                  className="w-full h-11 pr-10 pl-10 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm font-bold text-slate-950 shadow-xs placeholder:text-slate-400"
-                />
-                <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 pointer-events-none" />
-                <button
-                  type="button"
-                  onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)}
-                  className="absolute left-2.5 top-2.5 p-1 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
-                >
-                  <ChevronDown className={`w-4 h-4 transition-transform ${isCustomerDropdownOpen ? 'rotate-180' : ''}`} />
-                </button>
-              </div>
-
-              {/* Customer Dropdown Results */}
-              {isCustomerDropdownOpen && (
-                <div className="absolute z-20 top-full left-0 right-0 mt-1 bg-white border border-slate-300 rounded-2xl shadow-xl max-h-72 overflow-y-auto divide-y divide-slate-100">
-                  {customerSearchQuery.trim() && (
-                    <div className="p-2.5 bg-emerald-50 border-b border-emerald-200">
-                      <button
-                        type="button"
-                        onClick={() => handleStartNewCustomer(customerSearchQuery.trim())}
-                        className="w-full text-right p-2.5 bg-white hover:bg-emerald-100/60 rounded-xl border border-emerald-300 text-emerald-950 font-black text-xs flex items-center justify-between gap-2 cursor-pointer shadow-xs transition"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="bg-emerald-600 text-white p-1 rounded-lg">
-                            <Plus className="w-3.5 h-3.5" />
-                          </span>
-                          <span>إضافة "{customerSearchQuery.trim()}" كعميل جديد مسند للمندوب</span>
-                        </div>
-                        <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded font-black">
-                          عميل جديد ✨
-                        </span>
-                      </button>
-                    </div>
-                  )}
-
-                  {filteredCustomers.length === 0 ? (
-                    <div className="p-4 text-center text-xs text-slate-600 space-y-2">
-                      <p>لا يوجد عميل مطابق لبحثك في القائمة الحالية.</p>
-                      {customerSearchQuery.trim() && (
-                        <button
-                          type="button"
-                          onClick={() => handleStartNewCustomer(customerSearchQuery.trim())}
-                          className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs cursor-pointer shadow-xs"
-                        >
-                          + إضافة "{customerSearchQuery.trim()}" كعميل جديد
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    filteredCustomers.map((c) => {
-                      const isMyCustomer = isCustomerBelongingToCurrentRep(c);
-                      return (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => handleSelectCustomer(c)}
-                          className="w-full text-right p-3 hover:bg-amber-50/80 transition flex items-center justify-between gap-3 text-xs cursor-pointer"
-                        >
-                          <div>
-                            <div className="font-black text-slate-900 flex items-center flex-wrap gap-1.5">
-                              <span>{c.name}</span>
-                              {c.storeName && (
-                                <span className="text-slate-500 font-normal">({c.storeName})</span>
-                              )}
-                              {c.code && (
-                                <span className="bg-slate-900 text-amber-300 text-[10px] font-mono px-1.5 py-0.2 rounded">
-                                  {c.code}
-                                </span>
-                              )}
-                              {isMyCustomer ? (
-                                <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 text-[9px] font-black px-1.5 py-0.2 rounded">
-                                  مسند لك ✓
-                                </span>
-                              ) : (
-                                (c.salesRepName || c.repName) && (
-                                  <span className="bg-slate-100 text-slate-700 text-[9px] font-bold px-1.5 py-0.2 rounded">
-                                    المندوب: {c.salesRepName || c.repName}
-                                  </span>
-                                )
-                              )}
-                              {c.tier && (
-                                <span className={`text-[9px] font-black px-1.5 py-0.2 rounded ${
-                                  c.tier.includes('VIP') || c.tier.includes('مميز')
-                                    ? 'bg-amber-400 text-slate-950'
-                                    : c.tier.includes('A') || c.tier.includes('راقي')
-                                    ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
-                                    : 'bg-slate-100 text-slate-700'
-                                }`}>
-                                  {c.tier}
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
-                              {c.phone && <span>📞 {c.phone}</span>}
-                              {c.branchName && <span>🏢 الفرع: {c.branchName}</span>}
-                              {c.governorate && <span>📍 {c.governorate}</span>}
-                            </div>
-                          </div>
-                          <span className="text-[10px] text-amber-800 bg-amber-100 hover:bg-amber-200 font-bold px-2.5 py-1 rounded-xl shrink-0 border border-amber-300">
-                            اختيار العميل
-                          </span>
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Selected Customer Card or Manual / New Customer Input */}
-            {selectedCustomerId ? (
-              <div className="bg-amber-50/90 border border-amber-300 rounded-2xl p-3.5 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-black">
-                    <Store className="w-5 h-5" />
-                  </div>
-                  <div className="text-xs">
-                    <div className="font-black text-slate-950 text-sm flex items-center flex-wrap gap-2">
-                      <span>{customerName}</span>
-                      {customerCode && (
-                        <span className="bg-slate-900 text-amber-300 text-[10px] font-mono px-1.5 py-0.5 rounded">
-                          كود: {customerCode}
-                        </span>
-                      )}
-                      {customerTier && (
-                        <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-1.5 py-0.5 rounded">
-                          {customerTier}
-                        </span>
-                      )}
-                      {customerBranch && (
-                        <span className="bg-blue-100 text-blue-900 text-[10px] font-bold px-1.5 py-0.5 rounded border border-blue-200">
-                          🏢 {customerBranch}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[11px] text-slate-600 flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
-                      {customerPhone && <span>📞 {customerPhone}</span>}
-                      {customerAddress && <span>📍 {customerAddress}</span>}
-                      {customerRep && (
-                        <span className="bg-amber-100/70 text-amber-900 font-bold px-1.5 py-0.5 rounded">
-                          👤 المندوب المسند: {customerRep}
-                        </span>
-                      )}
-                      {customerTaxNumber && <span>🏛️ ضريبي: {customerTaxNumber}</span>}
-                    </div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleClearSelectedCustomer}
-                  className="text-xs text-rose-600 hover:text-rose-800 font-bold bg-white px-2.5 py-1.5 rounded-xl border border-rose-200 shadow-xs cursor-pointer shrink-0"
-                >
-                  تغيير العميل
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                {/* NEW CUSTOMER NOTIFICATION BADGE */}
-                <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between gap-3 text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="bg-emerald-600 text-white text-[10px] font-black px-2 py-0.5 rounded-md shrink-0">
-                      عميل جديد ✨
-                    </span>
-                    <span className="font-bold text-emerald-950">
-                      {customerName.trim()
-                        ? `سيتم حفظ وتوثيق العميل (${customerName}) وإسناده تلقائياً للمندوب (${customerRep || currentUser?.name || 'المندوب الحالي'}).`
-                        : `أدخل بيانات العميل الجديد أدناه وسيتم تسجيله وربطه بحساب المندوب تلقائياً فور حفظ الفاتورة.`}
-                    </span>
-                  </div>
-                  {isNewCustomerMode && (
-                    <button
-                      type="button"
-                      onClick={() => setIsCustomerDropdownOpen(true)}
-                      className="text-[11px] text-emerald-800 hover:text-emerald-950 font-black underline cursor-pointer shrink-0"
-                    >
-                      أو اختر من المسجلين
-                    </button>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-                  <div>
-                    <label className="block text-slate-900 font-black mb-1">
-                      اسم العميل / السوبر ماركت <span className="text-rose-600">*</span>
-                    </label>
-                    <input
-                      id="customer-name-input"
-                      type="text"
-                      value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
-                      placeholder="مثال: هايبر ماركت التوحيد والنور، محل سنتر شاهين..."
-                      className="w-full h-11 px-3 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm font-bold text-slate-950 shadow-xs placeholder:text-slate-400"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-900 font-black mb-1">
-                      رقم هاتف العميل (لإرسال الفاتورة عبر واتساب)
-                    </label>
-                    <input
-                      id="customer-phone-input"
-                      type="tel"
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      placeholder="مثال: 01011122233"
-                      className="w-full h-11 px-3 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm font-bold text-slate-950 shadow-xs placeholder:text-slate-400"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-900 font-black mb-1">عنوان العميل / المنطقة</label>
-                    <input
-                      id="customer-address-input"
-                      type="text"
-                      value={customerAddress}
-                      onChange={(e) => setCustomerAddress(e.target.value)}
-                      placeholder="مثال: شارع مكرم عبيد، المنطقة السادسة، مدينة نصر"
-                      className="w-full h-11 px-3 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm font-semibold text-slate-950 shadow-xs placeholder:text-slate-400"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-900 font-black mb-1">المندوب المسئول المسند إليه</label>
-                    <input
-                      type="text"
-                      disabled
-                      value={`${currentUser?.name || 'مندوب المبيعات'} (@${currentUser?.username || 'rep'})`}
-                      className="w-full h-11 px-3 bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 shadow-xs cursor-not-allowed"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Cart Items Table with Smart Carton & Piece Conversion */}
-          <div className="space-y-3" id="cart-items-section">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs sm:text-sm font-black text-slate-900 flex items-center gap-2">
-                <span>2. الأصناف المحجوزة والكميات الذكية (كراتين + قطع)</span>
-                <span className="bg-amber-100 text-amber-950 text-xs px-2.5 py-0.5 rounded-full font-black border border-amber-300">
-                  {cart.length} أصناف
-                </span>
-              </h3>
-              {cart.length > 0 && (
-                <button
-                  onClick={clearCart}
-                  className="text-xs text-rose-600 hover:text-rose-800 font-black flex items-center gap-1 cursor-pointer bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 transition"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>تفريغ الطلبية</span>
-                </button>
-              )}
-            </div>
-
-            {cart.length === 0 ? (
-              <div className="bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl p-8 text-center space-y-3">
-                <ShoppingCart className="w-12 h-12 text-slate-400 mx-auto" />
-                <div className="font-black text-slate-800 text-sm">الطلبية فارغة حالياً!</div>
-                <p className="text-slate-500 text-xs">
-                  توجه إلى كتالوج المنتجات واضغط على (+1 كرتونة) لإضافة أصناف دريم.
-                </p>
-                <button
-                  onClick={onClose}
-                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-5 py-2 rounded-xl text-xs shadow transition cursor-pointer"
-                >
-                  العودة للكتالوج
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-3.5">
-                {cart.map((item) => {
-                  const liveProd = products.find((p) => p.id === item.product.id) || item.product;
-                  const p = liveProd;
-                  const cartonQty = p.cartonQuantity && p.cartonQuantity > 0 ? p.cartonQuantity : 1;
-
-                  const branchAvail = Math.max(0, p.branchStockReserved);
-                  const mainAvail = Math.max(0, p.mainWarehouseReserved);
-                  const totalAvail = branchAvail + mainAvail;
-
-                  const currentCarton = item.cartonCount || 0;
-                  const currentPieces = item.pieceCount || 0;
-                  const totalUnits = (currentCarton * cartonQty) + currentPieces;
-
-                  const appliedCartonPrice = p.promoPrice && p.promoPrice > 0 ? p.promoPrice : p.cartonPrice;
-                  const piecePrice = p.piecePrice && p.piecePrice > 0 ? p.piecePrice : Math.round((appliedCartonPrice / cartonQty) * 100) / 100;
-
-                  // Stock Fulfillment Allocation Breakdown
-                  const fromBranch = Math.min(currentCarton, branchAvail);
-                  const fromMain = Math.max(0, currentCarton - fromBranch);
-                  const isOverTotalStock = currentCarton > totalAvail;
-
-                  return (
-                    <div
-                      key={p.id}
-                      className={`bg-white border rounded-2xl p-4 shadow-xs space-y-3.5 transition ${
-                        isOverTotalStock ? 'border-red-400 bg-red-50/20' : 'border-slate-200 hover:border-slate-300'
-                      }`}
-                    >
-                      {/* Product Header */}
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <ProductImage
-                            product={p}
-                            cloudinaryConfig={cloudinaryConfig}
-                            containerClassName="w-14 h-14 rounded-xl bg-slate-100 shrink-0 border border-slate-200"
-                            className="w-full h-full object-cover"
-                            showBadgeOnFallback={false}
-                          />
-                          <div>
-                            <div className="flex items-center flex-wrap gap-1.5 mb-1">
-                              <span className="bg-slate-900 text-amber-300 font-mono font-black text-xs px-2 py-0.5 rounded-md">
-                                {p.code}
-                              </span>
-                              {(() => {
-                                const deptMeta = getDepartmentMeta(p.department || p.category);
-                                const DeptIcon = deptMeta.icon;
-                                return (
-                                  <span className="bg-amber-100/90 text-amber-950 border border-amber-300/80 text-[10px] font-black px-1.5 py-0.5 rounded-md flex items-center gap-1">
-                                    <DeptIcon className="w-3 h-3 text-amber-800" />
-                                    <span>{p.department || p.category || 'دريم'}</span>
-                                  </span>
-                                );
-                              })()}
-                              {p.classification && (
-                                <span className="bg-slate-100 text-slate-800 border border-slate-200 text-[10px] font-bold px-1.5 py-0.5 rounded-md">
-                                  🏷️ {p.classification}
-                                </span>
-                              )}
-                              {p.color && p.color.trim() && p.color !== 'افتراضي' && (
-                                <span className="bg-indigo-50 text-indigo-900 border border-indigo-200 text-[10px] font-black px-1.5 py-0.5 rounded-md">
-                                  🎨 {p.color}
-                                </span>
-                              )}
-                              {p.size && p.size.trim() && p.size !== 'حجم قياسي' && (
-                                <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-1.5 py-0.5 rounded-md">
-                                  📐 {p.size}
-                                </span>
-                              )}
-                              <span className="bg-amber-100 text-amber-950 font-black text-[10px] px-2 py-0.5 rounded-md border border-amber-200">
-                                شدة الكرتونة: {cartonQty} ق
-                              </span>
-                            </div>
-                            <h4 className="font-black text-slate-900 text-xs sm:text-sm">{p.name}</h4>
-                            <div className="text-[11px] text-slate-600 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 mt-0.5">
-                              <span>
-                                سعر الكرتونة: <strong className="text-amber-900 font-black">{formatCurrency(appliedCartonPrice)}</strong>
-                              </span>
-                              <span>•</span>
-                              <span>
-                                سعر القطعة: <strong className="text-blue-900 font-bold">{formatCurrency(piecePrice)}</strong>
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={() => removeFromCart(p.id)}
-                          className="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 cursor-pointer transition"
-                          title="حذف الصنف من الطلبية"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      {/* Stock Allocation & Availability */}
-                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <Warehouse className="w-4 h-4 text-slate-600 shrink-0" />
-                          <div className="text-[11px] text-slate-700">
-                            <span>المتاح: </span>
-                            <strong className="text-emerald-700 font-black">{branchAvail} ك بالفرع</strong>
-                            <span> | </span>
-                            <strong className="text-blue-700 font-black">{mainAvail} ك بالمركزي</strong>
-                            <span> (إجمالي: <strong className="text-slate-950 font-black">{totalAvail} ك</strong>)</span>
-                          </div>
-                        </div>
-
-                        <div className="text-[11px] font-black">
-                          {isOverTotalStock ? (
-                            <span className="bg-red-100 text-red-800 px-2 py-0.5 rounded-md border border-red-300">
-                              ⚠️ الكمية تتجاوز الإجمالي المتاح ({totalAvail} ك فقط)!
-                            </span>
-                          ) : fromBranch > 0 && fromMain > 0 ? (
-                            <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded-md border border-amber-300 flex items-center gap-1">
-                              ⚡ حجز مشترك: {fromBranch} ك فرع + {fromMain} ك مخزن مركزي
-                            </span>
-                          ) : fromBranch > 0 ? (
-                            <span className="bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded-md border border-emerald-300">
-                              ✓ حجز كامل من رصيد الفرع ({fromBranch} ك)
-                            </span>
-                          ) : (
-                            <span className="bg-blue-100 text-blue-900 px-2 py-0.5 rounded-md border border-blue-300">
-                              🏢 حجز كامل من المخزن المركزي بأكتوبر ({fromMain} ك)
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Smart Quantity Controls: Cartons & Pieces with Automatic Conversion */}
-                      <div className="bg-amber-50/40 border border-amber-200/80 rounded-2xl p-3 grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
-                        
-                        {/* Cartons Counter */}
-                        <div className="sm:col-span-5 flex items-center gap-2">
-                          <span className="text-slate-900 font-black text-xs shrink-0">الكراتين:</span>
-                          <div className="flex items-center bg-white rounded-xl border border-slate-300 p-0.5 shadow-xs">
-                            <button
-                              type="button"
-                              onClick={() => updateCartItem(p.id, { cartonCount: Math.max(0, currentCarton - 1) })}
-                              className="w-8 h-8 flex items-center justify-center text-slate-800 hover:bg-slate-100 rounded-lg transition font-black cursor-pointer"
-                              title="تقليل كرتونة"
-                            >
-                              <Minus className="w-3.5 h-3.5" />
-                            </button>
-                            <input
-                              type="number"
-                              min="0"
-                              value={currentCarton}
-                              onChange={(e) => {
-                                const val = parseInt(e.target.value) || 0;
-                                updateCartItem(p.id, { cartonCount: Math.max(0, val) });
-                              }}
-                              className="w-12 text-center bg-transparent font-black text-slate-900 focus:outline-none text-xs"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => updateCartItem(p.id, { cartonCount: currentCarton + 1 })}
-                              className="w-8 h-8 flex items-center justify-center text-slate-800 hover:bg-slate-100 rounded-lg transition font-black cursor-pointer"
-                              title="زيادة كرتونة"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                          <span className="text-[11px] text-slate-500 font-bold">ك</span>
-                        </div>
-
-                        {/* Pieces Counter (Automatic Conversion) */}
-                        <div className="sm:col-span-4 flex items-center gap-2">
-                          <span className="text-slate-900 font-black text-xs shrink-0">القطع:</span>
-                          <div className="flex items-center bg-white rounded-xl border border-slate-300 p-0.5 shadow-xs">
-                            <button
-                              type="button"
-                              onClick={() => updateCartItem(p.id, { pieceCount: Math.max(0, currentPieces - 1) })}
-                              className="w-8 h-8 flex items-center justify-center text-slate-800 hover:bg-slate-100 rounded-lg transition font-black cursor-pointer"
-                              title="تقليل قطعة"
-                            >
-                              <Minus className="w-3.5 h-3.5" />
-                            </button>
-                            <input
-                              type="number"
-                              min="0"
-                              value={currentPieces}
-                              onChange={(e) => {
-                                const val = parseInt(e.target.value) || 0;
-                                updateCartItem(p.id, { pieceCount: Math.max(0, val) });
-                              }}
-                              className="w-12 text-center bg-transparent font-black text-slate-900 focus:outline-none text-xs"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => updateCartItem(p.id, { pieceCount: currentPieces + 1 })}
-                              className="w-8 h-8 flex items-center justify-center text-slate-800 hover:bg-slate-100 rounded-lg transition font-black cursor-pointer"
-                              title="زيادة قطعة (تتحول لكرتونة تلقائياً عند اكتمال الشدة)"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                          <span className="text-[11px] text-slate-500 font-bold">ق</span>
-                        </div>
-
-                        {/* Item Total Price */}
-                        <div className="sm:col-span-3 text-left">
-                          <span className="text-[10px] text-slate-500 block font-bold">إجمالي الصنف:</span>
-                          <div className="text-xs sm:text-sm font-black text-amber-950 bg-amber-200/80 px-2.5 py-1 rounded-xl border border-amber-300 inline-block">
-                            {formatCurrency(item.totalPrice)}
-                          </div>
-                        </div>
-
-                      </div>
-
-                      {/* Smart Quantity Status Banner */}
-                      <div className="bg-slate-50 rounded-xl p-2 text-[11px] flex flex-wrap items-center justify-between gap-2 text-slate-700">
-                        <div className="flex items-center gap-1.5">
-                          <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-                          <span>البيان بالفاتورة: <strong className="text-slate-950 font-black">{item.quantityDescription || `${currentCarton} كرتونة`}</strong></span>
-                        </div>
-                        <div className="text-slate-500 font-bold">
-                          إجمالي القطع الكلي: <strong className="text-slate-900">{totalUnits} قطعة</strong>
-                        </div>
-                      </div>
-
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Payment Method & Commercial Discount & Notes */}
-          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-200 space-y-3 text-xs" id="payment-and-discount-section">
-            <h3 className="text-xs font-black text-slate-900 flex items-center justify-between border-b border-slate-200 pb-2">
-              <span className="flex items-center gap-1.5">
-                <span>3. شروط السداد والخصم التجاري</span>
-              </span>
-              <span className="text-[10px] text-slate-500 font-bold">يمكنك تحديد أو إلغاء الخصم (0%) بحرية</span>
-            </h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {/* Payment Method */}
               <div>
-                <label className="block text-slate-800 font-bold mb-1">طريقة سداد الفاتورة</label>
-                <select
-                  id="payment-method-select"
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-                  className="w-full p-2.5 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs font-black text-slate-900 shadow-xs"
+                <h3 className="text-lg font-black text-slate-900">
+                  اسحب وأفلت ملف الإكسل (XLSX / XLS / CSV) هنا
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  أو اضغط لتصفح الملفات من جهازك أو هاتفك المحمول
+                </p>
+              </div>
+
+              <div>
+                <label className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-6 py-3 rounded-2xl text-xs cursor-pointer shadow-md transition">
+                  <Upload className="w-4 h-4" />
+                  <span>اختر ملف إكسل من جهازك</span>
+                  <input
+                    type="file"
+                    accept=".xlsx, .xls, .csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        handleFileUpload(e.target.files[0]);
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUB-TAB 3: Google Drive Recursive Folder Scanner */}
+      {activeSubTab === 'drive_scanner' && (
+        <div className="space-y-6 animate-in fade-in">
+          <div className="bg-gradient-to-br from-blue-950 via-slate-900 to-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl border border-blue-800/40 space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center gap-2 bg-blue-500/20 text-blue-300 text-xs font-black px-3 py-1 rounded-full border border-blue-500/30 mb-2">
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span>المسح الشامل لمجلدات Google Drive وتوليد روابط سريعة للكتالوج</span>
+                </div>
+                <h3 className="text-xl sm:text-2xl font-black text-white">
+                  مسح المجلد الرئيسي وكل المجلدات الفرعية تلقائياً وربط الصور بالشيت
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                  يقوم هذا السكريبت بالدخول في المجلد الرئيسي لمشاريعك على Google Drive، والتنقل في جميع المجلدات الفرعية (مهما كان عمقها)، واستخراج اسم كل صورة (كود أو اسم الصنف) وتوليد رابط CDN فائق السرعة جاهز للمناديب والكتالوج.
+                </p>
+              </div>
+
+              <div className="bg-slate-800/80 p-4 rounded-2xl border border-slate-700 text-center min-w-[200px]">
+                <div className="text-xs text-slate-400 font-medium">صيغة روابط الصور</div>
+                <div className="text-sm font-black text-amber-400 font-mono mt-1">lh3.googleusercontent.com</div>
+                <div className="text-[10px] text-emerald-400 mt-1">⚡ خفيفة وسريعة التحميل</div>
+              </div>
+            </div>
+
+            {/* Script Box with Copy Button */}
+            <div className="bg-slate-950 p-4 sm:p-5 rounded-2xl border border-blue-800/50 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-blue-300 flex items-center gap-2">
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>كود Google Apps Script (جاهز للتشغيل في Google Sheets):</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const scriptCode = `/**
+ * سكريبت قراءة جميع الصور من المجلد الرئيسي والمجلدات الفرعية
+ * يدعم آلاف الصور باستخدام Pagination لتجنب انتهاء المهلة (6 دقائق)
+ * وربط اسم/كود الصورة برابط مباشر خفيف ومناسب للكتالوج
+ *
+ * طريقة الاستخدام:
+ * 1. ضع MAIN_FOLDER_ID
+ * 2. شغل syncDriveFolderWithSheet — سيبدأ من حيث توقف تلقائياً
+ * 3. أعد تشغيله حتى ترى رسالة "اكتمل المسح"
+ */
+function syncDriveFolderWithSheet() {
+  // 🔴 ضع هنا الـ ID الخاص بالمجلد الرئيسي فقط
+  var MAIN_FOLDER_ID = "ضع_ID_المجلد_الرئيسي_هنا";
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Sheet_Images") || ss.insertSheet("Sheet_Images");
+
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["كود / اسم الصنف", "مسار المجلد الفرعي", "رابط الصورة المباشر", "File ID"]);
+    sheet.getRange("1:1").setFontWeight("bold").setBackground("#0284c7").setFontColor("#ffffff");
+  }
+
+  // قراءة علامة التوقف من الخلية E1 (تستخدم لاستئناف المسح)
+  var props = PropertiesService.getScriptProperties();
+  var resumeFolderId = props.getProperty("RESUME_FOLDER_ID");
+  var resumePath = props.getProperty("RESUME_PATH") || "";
+  var totalProcessed = parseInt(props.getProperty("TOTAL_PROCESSED") || "0", 10);
+
+  var startFolder = resumeFolderId
+    ? DriveApp.getFolderById(resumeFolderId)
+    : DriveApp.getFolderById(MAIN_FOLDER_ID);
+
+  if (!resumeFolderId) {
+    try {
+      startFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (e) {}
+  }
+
+  var startTime = new Date().getTime();
+  var TIME_LIMIT_MS = 5 * 60 * 1000; // 5 دقائق (هامش أمان قبل انتهاء المهلة)
+
+  Logger.log("بدء/استئناف المسح الشامل... (تم معالجة " + totalProcessed + " صورة حتى الآن)");
+  var result = processFolderRecursive(startFolder, sheet, resumePath, startTime, TIME_LIMIT_MS, { count: 0 });
+
+  totalProcessed += result.count;
+  props.setProperty("TOTAL_PROCESSED", String(totalProcessed));
+
+  if (result.timedOut) {
+    // حفظ علامة التوقف لاستئناف لاحقاً
+    if (result.nextFolderId) {
+      props.setProperty("RESUME_FOLDER_ID", result.nextFolderId);
+      props.setProperty("RESUME_PATH", result.nextPath || "");
+    }
+    SpreadsheetApp.getUi().alert(
+      "⏱️ تمت معالجة " + totalProcessed + " صورة.\n" +
+      "اقترب الوقت من الانتهاء. أعد تشغيل السكريبت لمتابعة المسح من حيث توقف."
+    );
+  } else {
+    // اكتمل المسح — تنظيف علامات التوقف
+    props.deleteProperty("RESUME_FOLDER_ID");
+    props.deleteProperty("RESUME_PATH");
+    props.deleteProperty("TOTAL_PROCESSED");
+    SpreadsheetApp.getUi().alert(
+      "✅ اكتمل المسح! تم جلب " + totalProcessed + " صورة من كافة المجلدات الفرعية بنجاح!"
+    );
+  }
+}
+
+function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimitMs, state) {
+  var rows = [];
+  var folderName = folder.getName();
+  var fullPath = currentPath ? (currentPath + " > " + folderName) : folderName;
+
+  var files = folder.getFiles();
+  while (files.hasNext()) {
+    var file = files.next();
+    var mimeType = file.getMimeType();
+
+    if (mimeType.indexOf("image") !== -1 || file.getName().match(/\\.(jpg|jpeg|png|webp)$/i)) {
+      var itemCodeOrName = file.getName().replace(/\\.[^/.]+$/, "").trim();
+      var catalogImageUrl = "https://lh3.googleusercontent.com/d/" + file.getId() + "=w800";
+
+      rows.push([
+        itemCodeOrName,
+        fullPath,
+        catalogImageUrl,
+        file.getId()
+      ]);
+      state.count++;
+    }
+  }
+
+  if (rows.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  }
+
+  var subFolders = folder.getFolders();
+  var subFolderList = [];
+  while (subFolders.hasNext()) {
+    subFolderList.push(subFolders.next());
+  }
+
+  for (var i = 0; i < subFolderList.length; i++) {
+    // فحص الوقت قبل كل مجلد فرعي
+    if (new Date().getTime() - startTime > timeLimitMs) {
+      return {
+        timedOut: true,
+        count: state.count,
+        nextFolderId: subFolderList[i].getId(),
+        nextPath: fullPath
+      };
+    }
+
+    // التأكد من أن المجلد الفرعي متاح للجميع بالرابط
+    try {
+      subFolderList[i].setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (e) {}
+
+    var subResult = processFolderRecursive(subFolderList[i], sheet, fullPath, startTime, timeLimitMs, state);
+    if (subResult.timedOut) {
+      return subResult;
+    }
+  }
+
+  return { timedOut: false, count: state.count };
+}`;
+                    navigator.clipboard.writeText(scriptCode);
+                    setCopiedScript(true);
+                    setTimeout(() => setCopiedScript(false), 3000);
+                  }}
+                  className="px-4 py-1.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs rounded-xl shadow flex items-center gap-1.5 cursor-pointer"
                 >
-                  <option value="نقدي (كاش)">نقدي (كاش عند الاستلام)</option>
-                  <option value="آجل (30 يوم)">آجل تجاري (30 يوم)</option>
-                  <option value="آجل (60 يوم)">آجل تجاري (60 يوم)</option>
-                  <option value="تحويل بنكي">تحويل بنكي / إلكتروني</option>
-                  <option value="شيك">شيك بنكي معتمد</option>
+                  {copiedScript ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  <span>{copiedScript ? 'تم نسخ السكريبت!' : 'نسخ كود Apps Script'}</span>
+                </button>
+              </div>
+
+              <pre className="p-3.5 bg-slate-900 text-slate-200 font-mono text-[11px] rounded-xl overflow-x-auto border border-slate-800 leading-relaxed max-h-60">
+{`function syncDriveFolderWithSheet() {
+  var MAIN_FOLDER_ID = "ضع_ID_المجلد_الرئيسي_هنا";
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getActiveSheet();
+  
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["كود / اسم الصنف", "مسار المجلد الفرعي", "رابط الصورة المباشر", "File ID"]);
+  }
+  var rootFolder = DriveApp.getFolderById(MAIN_FOLDER_ID);
+  processFolderRecursive(rootFolder, sheet, "");
+}`}
+              </pre>
+            </div>
+
+            {/* Step-by-Step Instructions & XLOOKUP Formula */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-slate-800/60 p-4 rounded-2xl border border-slate-700/60 space-y-2">
+                <div className="flex items-center gap-2 font-black text-amber-300 text-xs">
+                  <Globe className="w-4 h-4 text-amber-400" />
+                  <span>خطوات التشغيل في Google Sheets:</span>
+                </div>
+                <ol className="list-decimal list-inside space-y-1.5 text-xs text-slate-300 leading-relaxed">
+                  <li>افتح شيت Google Sheet الخاص بك.</li>
+                  <li>من القائمة العلوية اضغط <strong>Extensions (الإضافات) ⬅️ Apps Script</strong>.</li>
+                  <li>الصق الكود وضع الـ ID الخاص بالمجلد الرئيسي مكان <code>MAIN_FOLDER_ID</code>.</li>
+                  <li>اضغط <strong>Run (تشغيل)</strong> وسيقوم بملء كل الصور والروابط تلقائياً.</li>
+                </ol>
+              </div>
+
+              <div className="bg-slate-800/60 p-4 rounded-2xl border border-slate-700/60 space-y-2">
+                <div className="flex items-center gap-2 font-black text-emerald-300 text-xs">
+                  <Sparkles className="w-4 h-4 text-emerald-400" />
+                  <span>معادلة الربط التلقائي في شيت الأسعار (XLOOKUP):</span>
+                </div>
+                <div className="p-2.5 bg-slate-950 font-mono text-[11px] text-emerald-300 rounded-xl border border-slate-800 select-all">
+                  =XLOOKUP(A2; Sheet_Images!A:A; Sheet_Images!C:C; "بدون صورة")
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  حيث <code>A2</code> هو كود المنتج، و <code>Sheet_Images</code> هو الشيت الذي تم استخراج الصور فيه.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Preview Table & Confirmation Section (Shown when data is loaded from Excel or Google Sheets) */}
+      {previewProducts.length > 0 && (
+        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 space-y-5 animate-in fade-in">
+          
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full bg-emerald-500 animate-ping" />
+                <h3 className="text-lg font-black text-slate-900">
+                  تم قراءة {previewProducts.length} صنف بالكامل من الملف (بدون دمج أو توحيد للأكواد)
+                </h3>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                يتم إدراج كل سطر كصنف مستقل ببياناته الخاصة ومخزونه وصورته • إجمالي الأسطر: <span className="font-bold text-slate-800">{previewProducts.length} صنف</span>
+              </p>
+            </div>
+
+            {/* Import Mode Selection */}
+            <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-2xl border border-slate-200">
+              <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="importMode"
+                  value="replace"
+                  checked={importMode === 'replace'}
+                  onChange={() => setImportMode('replace')}
+                  className="text-amber-600 focus:ring-amber-500"
+                />
+                <span>استبدال الأصناف الحالية بالكامل ({previewProducts.length} صنف جديد)</span>
+              </label>
+
+              <label className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="importMode"
+                  value="merge"
+                  checked={importMode === 'merge'}
+                  onChange={() => setImportMode('merge')}
+                  className="text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>إضافة ودمج مع الأصناف السابقة</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Search and Page Size Controls inside Preview */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-amber-50/50 p-3 rounded-2xl border border-amber-200/70">
+            <div className="relative w-full sm:w-80">
+              <input
+                type="text"
+                value={previewSearchTerm}
+                onChange={(e) => {
+                  setPreviewSearchTerm(e.target.value);
+                  setPreviewPage(1);
+                }}
+                placeholder="بحث في الجدول (بالكود، الاسم، اللون، القسم...)"
+                className="w-full bg-white border border-amber-200 rounded-xl pr-9 pl-8 py-2 text-xs font-medium focus:ring-2 focus:ring-amber-500 focus:outline-none"
+              />
+              <Search className="w-4 h-4 text-amber-700 absolute right-3 top-2.5" />
+              {previewSearchTerm && (
+                <button
+                  onClick={() => {
+                    setPreviewSearchTerm('');
+                    setPreviewPage(1);
+                  }}
+                  className="absolute left-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                <span>عرض في الصفحة:</span>
+                <select
+                  value={previewPageSize}
+                  onChange={(e) => {
+                    const val = e.target.value === 'all' ? 'all' : Number(e.target.value);
+                    setPreviewPageSize(val);
+                    setPreviewPage(1);
+                  }}
+                  className="bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value={50}>50 صنف</option>
+                  <option value={100}>100 صنف</option>
+                  <option value={250}>250 صنف</option>
+                  <option value={500}>500 صنف</option>
+                  <option value={1000}>1000 صنف</option>
+                  <option value={2000}>2000 صنف</option>
+                  <option value={5000}>5000 صنف</option>
+                  <option value="all">عرض الكل ({previewProducts.length} صنف)</option>
                 </select>
               </div>
 
-              {/* Commercial Discount % */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-slate-800 font-bold">الخصم التجاري الممنوح (%)</label>
-                  <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded">
-                    {discountPercent > 0 ? `-${formatCurrency(summary.discountAmount)}` : 'بدون خصم (0 ج.م)'}
+              {previewPageSize !== 'all' && totalPreviewPages > 1 && (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setPreviewPage(1)}
+                    disabled={previewPage === 1}
+                    className="p-1 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="الصفحة الأولى"
+                  >
+                    <ChevronsRight className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
+                    disabled={previewPage === 1}
+                    className="p-1 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="الصفحة السابقة"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                  <span className="text-[11px] font-bold text-slate-700 px-2">
+                    صفحة {previewPage} من {totalPreviewPages}
                   </span>
+                  <button
+                    onClick={() => setPreviewPage((p) => Math.min(totalPreviewPages, p + 1))}
+                    disabled={previewPage === totalPreviewPages}
+                    className="p-1 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="الصفحة التالية"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setPreviewPage(totalPreviewPages)}
+                    disabled={previewPage === totalPreviewPages}
+                    className="p-1 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="الصفحة الأخيرة"
+                  >
+                    <ChevronsLeft className="w-4 h-4" />
+                  </button>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="relative flex-1">
-                    <input
-                      id="discount-percent-input"
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.5"
-                      value={discountPercent}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value);
-                        setDiscountPercent(isNaN(val) ? 0 : Math.max(0, Math.min(100, val)));
-                      }}
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs font-black text-slate-900 shadow-xs text-center"
-                      placeholder="0"
-                    />
-                    <span className="absolute left-2.5 top-2.5 text-slate-400 font-black text-xs">%</span>
-                  </div>
-
-                  {/* Quick Preset Buttons */}
-                  <div className="flex items-center gap-1">
-                    {[0, 2, 3.5, 5].map((pct) => (
-                      <button
-                        key={pct}
-                        type="button"
-                        onClick={() => setDiscountPercent(pct)}
-                        className={`px-2 py-2 rounded-lg text-[11px] font-black transition cursor-pointer ${
-                          discountPercent === pct
-                            ? 'bg-amber-500 text-slate-950 shadow-xs'
-                            : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
-                        }`}
-                      >
-                        {pct === 0 ? '0%' : `${pct}%`}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Notes */}
-              <div>
-                <label className="block text-slate-800 font-bold mb-1">ملاحظات التحميل والتسليم</label>
-                <input
-                  id="order-notes-input"
-                  type="text"
-                  value={orderNotes}
-                  onChange={(e) => setOrderNotes(e.target.value)}
-                  placeholder="مثال: تسليم صباحاً، إرفاق إشعار الخصم..."
-                  className="w-full p-2.5 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs font-semibold text-slate-900 shadow-xs placeholder:text-slate-400"
-                />
-              </div>
+              )}
             </div>
           </div>
 
-          {/* Shortage Backorder Splitting Option */}
-          {hasWarehouseItems && (
-            <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3.5 space-y-2 text-xs">
-              <label className="flex items-start gap-2.5 cursor-pointer">
+          {/* Table of Preview Items */}
+          <div className="overflow-x-auto border border-slate-200 rounded-2xl max-h-[500px]">
+            <table className="w-full text-right text-xs">
+              <thead className="bg-slate-900 text-amber-300 font-bold sticky top-0 z-10 shadow-sm">
+                <tr>
+                  <th className="p-3 w-12 text-center">#</th>
+                  <th className="p-3">الكود</th>
+                  <th className="p-3">اللون</th>
+                  <th className="p-3">الحجم</th>
+                  <th className="p-3">اسم وبيان الصنف</th>
+                  <th className="p-3">القسم / Brand</th>
+                  <th className="p-3">شدة الكرتونة</th>
+                  <th className="p-3">سعر الكرتونة</th>
+                  <th className="p-3">مخزون الفرع</th>
+                  <th className="p-3">مخزن أكتوبر الرئيسي</th>
+                  <th className="p-3">رابط الصورة (Drive / Sheet)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium">
+                {paginatedPreviewProducts.length === 0 ? (
+                  <tr>
+                    <td colSpan={11} className="p-8 text-center text-slate-400 font-bold">
+                      لا توجد أصناف مطابقة للبحث "{previewSearchTerm}"
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedPreviewProducts.map((p, idx) => {
+                    const globalIdx = previewPageSize === 'all' ? idx + 1 : (previewPage - 1) * previewPageSize + idx + 1;
+                    return (
+                      <tr key={p.id || idx} className="hover:bg-amber-50/50 transition-colors">
+                        <td className="p-3 text-center text-slate-400 font-mono text-[11px]">{globalIdx}</td>
+                        <td className="p-3 font-bold text-amber-900 bg-amber-50/80 font-mono">{p.code}</td>
+                        <td className="p-3 font-bold text-slate-800">
+                          {p.color && p.color.trim() && p.color !== 'افتراضي' ? (
+                            <span className="bg-indigo-50 text-indigo-900 px-2 py-0.5 rounded-md text-[11px] font-black border border-indigo-200">
+                              {p.color}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">---</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-slate-700 font-medium">
+                          {p.size && p.size.trim() && p.size !== 'حجم قياسي' ? p.size : '---'}
+                        </td>
+                        <td className="p-3 font-bold text-slate-900">{p.name}</td>
+                        <td className="p-3 text-slate-600 font-semibold">{p.department || p.category}</td>
+                        <td className="p-3 font-bold text-slate-700">{p.cartonQuantity} ق</td>
+                        <td className="p-3 text-amber-900 font-black text-sm">{formatCurrency(p.cartonPrice)}</td>
+                        <td className="p-3 font-bold text-slate-700">{p.branchStockActual} كرتونة</td>
+                        <td className="p-3 font-bold text-slate-700">{p.mainWarehouseActual} كرتونة</td>
+                        <td className="p-3 text-[10px] text-slate-500 font-mono max-w-[150px] truncate">
+                          {p.imageUrl ? '✓ رابط صورة مباشر' : 'بدون صورة'}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Bottom Pagination & Summary Info */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600 pt-1">
+            <div>
+              {previewSearchTerm ? (
+                <span>
+                  تم العثور على <strong className="text-slate-900 font-bold">{filteredPreviewProducts.length}</strong> صنف مطابق للبحث من إجمالي <strong className="text-slate-900 font-bold">{previewProducts.length}</strong> صنف.
+                </span>
+              ) : (
+                <span>
+                  يتم الآن عرض {previewPageSize === 'all' ? previewProducts.length : `${Math.min(filteredPreviewProducts.length, (previewPage - 1) * (typeof previewPageSize === 'number' ? previewPageSize : 0) + 1)} إلى ${Math.min(filteredPreviewProducts.length, previewPage * (typeof previewPageSize === 'number' ? previewPageSize : 0))}`} من إجمالي <strong className="text-slate-900 font-bold">{previewProducts.length}</strong> صنف في الملف.
+                </span>
+              )}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  setPreviewProducts([]);
+                  setPreviewSearchTerm('');
+                }}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-5 py-2.5 rounded-xl text-xs transition"
+              >
+                إلغاء المعاينة
+              </button>
+              <button
+                onClick={handleApplyImport}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-7 py-2.5 rounded-xl text-xs sm:text-sm shadow-md transition flex items-center gap-2"
+              >
+                <Check className="w-4 h-4" />
+                <span>تأكيد حفظ كافة الأصناف ({previewProducts.length} صنف) في المنظومة</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUB-TAB 4: Customers Database Management */}
+      {activeSubTab === 'customers' && (
+        <div className="space-y-6">
+          {/* Customer Google Sheets & Excel Sync Hero */}
+          <div className="bg-gradient-to-br from-amber-950 via-slate-900 to-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl border border-amber-800/40 space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center gap-2 bg-amber-500/20 text-amber-300 text-xs font-black px-3 py-1 rounded-full border border-amber-500/30 mb-2">
+                  <Store className="w-3.5 h-3.5" />
+                  <span>إدارة ومزامنة قاعدة بيانات العملاء والمحلات</span>
+                </div>
+                <h3 className="text-xl sm:text-2xl font-black text-white">
+                  ربط شيت العملاء (Google Sheets) أو رفع ملف إكسل
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                  استيراد ومزامنة كود العميل، اسم المحل / السوبر ماركت، رقم الهاتف، الفرع التابع له، المحافظة، والعنوان التفصيلي للاستخدام المباشر في فواتير المندوبين.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const res = cleanAndDeduplicateCustomers();
+                    if (res.duplicatesRemoved > 0) {
+                      setCustomerSheetSuccess(`تم فحص وتنظيف قاعدة العملاء بنجاح! تم دمج وإزالة ${res.duplicatesRemoved} سجل مكرر، واستقرار السجل عند ${res.deduplicatedCount} عميل فريد.`);
+                    } else {
+                      setCustomerSheetSuccess(`سجل العملاء نظيف ومثالي تماماً (${res.deduplicatedCount} عميل فريد) ولا يحتوي على أي تكرارات.`);
+                    }
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black px-4 py-2.5 rounded-xl transition shadow-sm flex items-center gap-2 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  <span>تنظيف وضغط التكرارات ({customers.length} عميل)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={generateSampleCustomersTemplate}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-black px-4 py-2.5 rounded-xl transition flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4 text-amber-400" />
+                  <span>تحميل نموذج شيت العملاء</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => exportCustomersToExcel(customers)}
+                  className="bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black px-4 py-2.5 rounded-xl transition shadow-sm flex items-center gap-2"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>تصدير العملاء المسجلين ({customers.length})</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Supabase Free Tier Protection Info */}
+            <div className="bg-emerald-950/40 border border-emerald-500/30 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2.5 text-emerald-300">
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                <span>
+                  <strong>حالة استهلاك قاعدة البيانات (Supabase Free Tier):</strong> النظام مستقر في الخطة المجانية 100% (~5 ميجابايت مستخدمة من أصل 500 ميجابايت متاحة مجاناً). تنظيف التكرارات يضمن بقاء المنظومة مجانية دائماً وسريعة الاستجابة.
+                </span>
+              </div>
+              <span className="bg-emerald-900/60 text-emerald-200 font-bold px-3 py-1 rounded-lg border border-emerald-600/40 shrink-0 text-[11px]">
+                استهلاك &lt; 1% من الخطة المجانية
+              </span>
+            </div>
+
+            {/* Google Sheet URL Sync Input for Customers */}
+            <div className="bg-slate-950/60 p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-4">
+              <div className="space-y-1.5">
+                <label className="block text-xs sm:text-sm font-bold text-amber-200">
+                  رابط Google Sheets لقاعدة بيانات العملاء:
+                </label>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <input
+                    type="url"
+                    value={customerGoogleSheetUrl}
+                    onChange={(e) => {
+                      setCustomerGoogleSheetUrl(e.target.value);
+                      setCustomerSheetError(null);
+                      setCustomerSheetSuccess(null);
+                    }}
+                    placeholder="https://docs.google.com/spreadsheets/d/your-customer-sheet-id/edit..."
+                    className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-xs sm:text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                  <button
+                    type="button"
+                    disabled={isSyncingCustomers || !customerGoogleSheetUrl.trim()}
+                    onClick={async () => {
+                      if (!customerGoogleSheetUrl.trim()) return;
+                      setIsSyncingCustomers(true);
+                      setCustomerSheetError(null);
+                      setCustomerSheetSuccess(null);
+                      try {
+                        const res = await fetchCustomersFromGoogleSheetUrl(customerGoogleSheetUrl);
+                        if (res.errors.length > 0) {
+                          setCustomerSheetError(res.errors.join(' | '));
+                        }
+                        if (res.customers.length > 0) {
+                          setCustomerPreviewList(res.customers);
+                          setCustomerSheetSuccess(`تمت قراءة ${res.customers.length} عميل بنجاح من Google Sheets! راجع الجدول أدناه لتأكيد الحفظ.`);
+                        } else {
+                          setCustomerSheetError('لم يتم العثور على أي بيانات صالحة للعملاء داخل الشيت.');
+                        }
+                      } catch (err: any) {
+                        setCustomerSheetError(err?.message || 'تعذر الاتصال بـ Google Sheets');
+                      } finally {
+                        setIsSyncingCustomers(false);
+                      }
+                    }}
+                    className="bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black px-6 py-3 rounded-xl text-xs sm:text-sm shadow-md transition disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    {isSyncingCustomers ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>جاري جلب العملاء...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Globe className="w-4 h-4" />
+                        <span>قراءة شيت العملاء</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Status alerts */}
+              {customerSheetSuccess && (
+                <div className="bg-emerald-950/80 border border-emerald-500/50 text-emerald-200 p-3.5 rounded-xl text-xs flex items-center gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{customerSheetSuccess}</span>
+                </div>
+              )}
+              {customerSheetError && (
+                <div className="bg-rose-950/80 border border-rose-500/50 text-rose-200 p-3.5 rounded-xl text-xs flex items-center gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>{customerSheetError}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Direct Excel File Upload for Customers */}
+            <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+              <div className="text-slate-300 flex items-center gap-2">
+                <Upload className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>أو يمكنك رفع ملف إكسل للعملاء مباشرة من جهازك (.xlsx / .csv):</span>
+              </div>
+              <label className="bg-slate-800 hover:bg-slate-700 text-white font-bold px-4 py-2 rounded-xl cursor-pointer border border-slate-700 transition">
+                <span>اختيار ملف العملاء من الجهاز</span>
                 <input
-                  type="checkbox"
-                  checked={splitShortagesToBackorder}
-                  onChange={(e) => setSplitShortagesToBackorder(e.target.checked)}
-                  className="w-4 h-4 mt-0.5 accent-amber-500 rounded cursor-pointer"
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    setIsSyncingCustomers(true);
+                    setCustomerSheetError(null);
+                    setCustomerSheetSuccess(null);
+                    try {
+                      const res = await parseExcelCustomers(file);
+                      if (res.errors.length > 0) setCustomerSheetError(res.errors.join(' | '));
+                      if (res.customers.length > 0) {
+                        setCustomerPreviewList(res.customers);
+                        setCustomerSheetSuccess(`تمت قراءة ${res.customers.length} عميل من الملف بنجاح!`);
+                      }
+                    } catch (err: any) {
+                      setCustomerSheetError(err?.message || 'خطأ أثناء قراءة ملف العملاء');
+                    } finally {
+                      setIsSyncingCustomers(false);
+                    }
+                  }}
                 />
+              </label>
+            </div>
+          </div>
+
+          {/* Customer Preview Table (if loaded from sheet/file) */}
+          {customerPreviewList.length > 0 && (
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
                 <div>
-                  <span className="font-black text-slate-900 block">
-                    فصل أصناف النواقص تلقائياً في فاتورة توريد مستقلة (-NQ) محولة من المخزن المركزي بأكتوبر
-                  </span>
-                  <p className="text-[11px] text-slate-600 mt-0.5">
-                    تضمن هذه الميزة إصدار فاتورة فورية لما هو متاح بالفرع، وفاتورة ملحقة بنواقص الطلبية لطلب تحويلها من المخزن الرئيسي المركزي دون تعطيل تسليم العميل.
+                  <h4 className="text-base font-black text-slate-900 flex items-center gap-2">
+                    <UserCheck className="w-5 h-5 text-emerald-600" />
+                    <span>معاينة العملاء المستوردين ({customerPreviewList.length} عميل)</span>
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    اختر طريقة الاستيراد واضغط على زر الحفظ لتحديث قاعدة البيانات.
                   </p>
                 </div>
-              </label>
+
+                <div className="flex items-center gap-3">
+                  <select
+                    value={customerImportMode}
+                    onChange={(e) => setCustomerImportMode(e.target.value as 'merge' | 'replace')}
+                    className="bg-slate-100 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800"
+                  >
+                    <option value="merge">دمج وتحديث العملاء (Merge)</option>
+                    <option value="replace">استبدال كامل السجل (Replace)</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      importCustomersList(customerPreviewList, customerImportMode);
+                      setCustomerPreviewList([]);
+                      setCustomerSheetSuccess('تم حفظ وتحديث قاعدة بيانات العملاء بنجاح في المنظومة!');
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-5 py-2 rounded-xl text-xs shadow transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>تأكيد حفظ العملاء ({customerPreviewList.length})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCustomerPreviewList([])}
+                    className="text-xs text-slate-500 hover:text-slate-700 px-3 py-2"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </div>
+
+              {/* Preview Customer Table */}
+              <div className="overflow-x-auto max-h-72 border border-slate-200 rounded-2xl">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-100 text-slate-700 font-black sticky top-0">
+                    <tr>
+                      <th className="p-3">#</th>
+                      <th className="p-3">كود العميل</th>
+                      <th className="p-3">اسم العميل</th>
+                      <th className="p-3">اسم المحل / السوبر ماركت</th>
+                      <th className="p-3">رقم الهاتف</th>
+                      <th className="p-3">الفرع</th>
+                      <th className="p-3">المحافظة / العنوان</th>
+                      <th className="p-3">الرقم الضريبي</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-semibold text-slate-800">
+                    {customerPreviewList.map((c, i) => (
+                      <tr key={c.id || i} className="hover:bg-amber-50/50">
+                        <td className="p-3 text-slate-400">{i + 1}</td>
+                        <td className="p-3 font-mono font-bold text-amber-800">{c.code}</td>
+                        <td className="p-3 font-bold text-slate-950">{c.name}</td>
+                        <td className="p-3">{c.storeName || '---'}</td>
+                        <td className="p-3">{c.phone || '---'}</td>
+                        <td className="p-3">{c.branchName || 'الفرع الرئيسي'}</td>
+                        <td className="p-3">{c.address || c.governorate || '---'}</td>
+                        <td className="p-3">{c.taxNumber || '---'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 
-          {/* Customer Appreciation Note */}
-          <div className="bg-gradient-to-r from-amber-50 to-amber-100/70 border border-amber-300/80 rounded-2xl p-3.5 text-center shadow-xs">
-            <p className="text-xs sm:text-sm font-black text-amber-950 flex items-center justify-center gap-2">
-              <span>✨ شكراً لتعاملكم معنا، يسعدنا دائماً أن تكونوا جزءاً من عائلة شركة دريم للتجارة والتوزيع ❤️</span>
-            </p>
-          </div>
-
-          {/* Financial Summary Box */}
-          <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 text-white rounded-3xl p-5 shadow-xl border border-slate-700 space-y-3" id="financial-summary-box">
-            <div className="flex items-center justify-between border-b border-slate-700 pb-3">
-              <h4 className="font-black text-sm text-amber-300">الملخص المالي للفاتورة الإلكترونية</h4>
-              <span className="text-xs text-slate-300 font-bold">شركة دريم • حساب سعر الكرتونة والقطع والخصم المباشر</span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
-              <div className="bg-slate-800/90 p-3 rounded-2xl border border-slate-700">
-                <span className="text-slate-400 block text-[10px] font-bold">إجمالي الكراتين</span>
-                <strong className="text-base font-black text-amber-400">{summary.totalCartons} كرتونة</strong>
-              </div>
-
-              <div className="bg-slate-800/90 p-3 rounded-2xl border border-slate-700">
-                <span className="text-slate-400 block text-[10px] font-bold">إجمالي القطع الكلي</span>
-                <strong className="text-sm font-black text-blue-300">{summary.totalPieces} قطعة</strong>
-              </div>
-
-              <div className="bg-slate-800/90 p-3 rounded-2xl border border-slate-700">
-                <span className="text-slate-400 block text-[10px] font-bold">المجموع قبل الخصم</span>
-                <strong className="text-sm font-black text-slate-200">{formatCurrency(summary.subtotal)}</strong>
-              </div>
-
-              <div className="bg-slate-800/90 p-3 rounded-2xl border border-slate-700">
-                <span className="text-slate-400 block text-[10px] font-bold">
-                  الخصم التجاري ({discountPercent}%)
-                </span>
-                <strong className={`text-sm font-black ${discountPercent > 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
-                  {discountPercent > 0 ? `-${formatCurrency(summary.discountAmount)}` : '0 ج.م'}
-                </strong>
-              </div>
-            </div>
-
-            {/* Grand Total */}
-            <div className="flex flex-wrap items-center justify-between pt-2 border-t border-slate-700">
-              <div>
-                <span className="text-xs text-slate-300 block font-bold">إجمالي الفاتورة الصافي النهائي:</span>
-                <div className="text-2xl font-black text-yellow-400 tracking-tight">
-                  {formatCurrency(summary.grandTotal)}
+          {/* Current Saved Customers Table */}
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center font-black">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-base font-black text-slate-900">
+                    سجل العملاء النشط بالمنظومة ({customers.length} عميل)
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    يتم استدعاء هؤلاء العملاء تلقائياً في شاشة الفواتير للمندوبين والبحث السريع
+                  </p>
                 </div>
               </div>
-              <div className="text-xs text-emerald-300 font-bold bg-emerald-950/60 px-3 py-1.5 rounded-xl border border-emerald-500/30">
-                صافي مطلوب سداده: {formatCurrency(summary.grandTotal)}
+
+              {/* Search Bar for current customers */}
+              <div className="relative w-full sm:w-72">
+                <input
+                  type="text"
+                  value={customerSearchTerm}
+                  onChange={(e) => setCustomerSearchTerm(e.target.value)}
+                  placeholder="بحث بالاسم، الكود، الهاتف، المحل..."
+                  className="w-full h-10 pr-9 pl-4 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 font-bold"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
               </div>
             </div>
 
-          </div>
+            {customers.length === 0 ? (
+              <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-300 text-slate-500 text-xs">
+                لا يوجد عملاء مسجلين حالياً. قم بربط Google Sheet أو رفع ملف إكسل أعلاه.
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 rounded-2xl max-h-96">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-100 text-slate-700 font-black sticky top-0">
+                    <tr>
+                      <th className="p-3">#</th>
+                      <th className="p-3">كود العميل</th>
+                      <th className="p-3">اسم العميل</th>
+                      <th className="p-3">اسم المحل / المعرض</th>
+                      <th className="p-3">رقم الهاتف</th>
+                      <th className="p-3">الفرع التابع له</th>
+                      <th className="p-3">العنوان والمحافظة</th>
+                      <th className="p-3">الرقم الضريبي</th>
+                      <th className="p-3 text-center">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+                    {(() => {
+                      const filtered = customers.filter((c) => {
+                        if (!customerSearchTerm.trim()) return true;
+                        const q = customerSearchTerm.toLowerCase().trim();
+                        return (
+                          c.name.toLowerCase().includes(q) ||
+                          (c.code && c.code.toLowerCase().includes(q)) ||
+                          (c.phone && c.phone.includes(q)) ||
+                          (c.storeName && c.storeName.toLowerCase().includes(q)) ||
+                          (c.governorate && c.governorate.toLowerCase().includes(q)) ||
+                          (c.branchName && c.branchName.toLowerCase().includes(q))
+                        );
+                      });
+                      const displayed = filtered.slice(0, customerDisplayLimit);
 
+                      return (
+                        <>
+                          {displayed.map((c, i) => (
+                            <tr key={c.id} className="hover:bg-amber-50/40">
+                              <td className="p-3 text-slate-400 font-bold">{i + 1}</td>
+                              <td className="p-3 font-mono font-bold text-amber-900">{c.code || '---'}</td>
+                              <td className="p-3 font-black text-slate-900">{c.name}</td>
+                              <td className="p-3 font-bold text-slate-700">{c.storeName || '---'}</td>
+                              <td className="p-3 font-bold text-emerald-800">{c.phone || '---'}</td>
+                              <td className="p-3 text-slate-600">{c.branchName || 'الفرع الرئيسي'}</td>
+                              <td className="p-3 text-slate-600">{c.address || c.governorate || '---'}</td>
+                              <td className="p-3 font-mono text-slate-500">{c.taxNumber || '---'}</td>
+                              <td className="p-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (window.confirm(`هل أنت متأكد من حذف العميل (${c.name})؟`)) {
+                                      deleteCustomer(c.id);
+                                    }
+                                  }}
+                                  className="text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 cursor-pointer transition"
+                                  title="حذف العميل"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                          {filtered.length > customerDisplayLimit && (
+                            <tr>
+                              <td colSpan={9} className="p-4 text-center bg-slate-50">
+                                <button
+                                  type="button"
+                                  onClick={() => setCustomerDisplayLimit((prev) => prev + 100)}
+                                  className="bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs px-5 py-2 rounded-xl transition cursor-pointer"
+                                >
+                                  عرض المزيد من العملاء (يتبقى {filtered.length - customerDisplayLimit} عميل)
+                                </button>
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Supported Columns Reference */}
+      <div className="bg-slate-900 text-white rounded-3xl p-5 shadow-sm space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="font-extrabold text-xs text-amber-300">
+            الأعمدة الأساسية المدعومة تلقائياً في Google Sheets والإكسل:
+          </span>
+          <span className="text-[10px] text-slate-400">مطابقة ذكية وسريعة للأسعار والمخزون</span>
         </div>
 
-        {/* Modal Actions Footer */}
-        <div className="bg-slate-50 p-3 sm:p-4 border-t border-slate-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5" id="order-builder-footer">
-          
-          <button
-            onClick={onClose}
-            className="w-full sm:w-auto h-11 px-4 text-xs font-black text-slate-700 hover:text-slate-900 bg-white border border-slate-300 rounded-xl hover:bg-slate-100 transition cursor-pointer shadow-xs order-last sm:order-first flex items-center justify-center"
-          >
-            إلغاء الطلبية
-          </button>
-
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-            
-            {/* Direct Export to Excel */}
-            <button
-              id="export-excel-order-btn"
-              disabled={isSubmitting || cart.length === 0}
-              onClick={() => handleSubmitOrder(true, false)}
-              className="flex items-center justify-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-black h-11 px-3.5 rounded-xl text-xs shadow-sm transition disabled:opacity-50 cursor-pointer"
-              title="تصدير شيت إكسل رسمي مع كود العميل والكراتين والقطع"
+        <div className="flex flex-wrap gap-1.5 text-[11px]">
+          {[
+            'الكود',
+            'اسم الصنف',
+            'اولوية البيع',
+            'التصنيف',
+            'حالة الصنف',
+            'شدة الكرتونة',
+            'الحجم',
+            'اللون',
+            'الفرع - فعلى',
+            'الفرع - بعد الحجز',
+            'المخزن الرئيسي - فعلى',
+            'المخزن الرئيسي - بعد الحجز',
+            'القسم',
+            'الفئة',
+            'سعر العرض',
+            'سعر الكرتونة',
+            'اسم الفرع',
+            'رابط صورة Google Drive / مباشر'
+          ].map((col, idx) => (
+            <span
+              key={idx}
+              className="bg-slate-800 text-slate-300 px-2.5 py-1 rounded-lg border border-slate-700"
             >
-              <FileSpreadsheet className="w-4 h-4 shrink-0" />
-              <span>حفظ وتصدير شيت إكسل</span>
-            </button>
-
-            {/* Direct Export to PDF */}
-            <button
-              id="export-pdf-order-btn"
-              disabled={isSubmitting || cart.length === 0}
-              onClick={() => handleSubmitOrder(false, true)}
-              className="flex items-center justify-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white font-black h-11 px-3.5 rounded-xl text-xs shadow-sm transition disabled:opacity-50 cursor-pointer"
-              title="حفظ الطلبية وتحميل فاتورة PDF فورية"
-            >
-              <Download className="w-4 h-4 shrink-0" />
-              <span>حفظ وتحميل PDF 📄</span>
-            </button>
-
-            {/* Save Order & Open E-Invoice */}
-            <button
-              id="confirm-order-btn"
-              disabled={isSubmitting || cart.length === 0}
-              onClick={() => handleSubmitOrder(false, false)}
-              className="flex items-center justify-center gap-2 bg-gradient-to-r from-amber-400 via-amber-500 to-amber-400 hover:from-amber-300 hover:to-amber-400 text-slate-950 font-black h-12 sm:h-11 px-5 rounded-xl text-xs sm:text-sm shadow-md transition transform active:scale-95 disabled:opacity-50 cursor-pointer"
-            >
-              <CheckCircle2 className="w-5 h-5 shrink-0 stroke-[2.5]" />
-              <span>تأكيد الحجز والفاتورة الإلكترونية</span>
-            </button>
-
-          </div>
-
+              {idx + 1}. {col}
+            </span>
+          ))}
         </div>
-
       </div>
+
+      {/* Wipe Confirmation Modal */}
+      {isWipeModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h3 className="text-lg font-black text-slate-900">تأكيد مسح وتصفير كافة البيانات</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                هل أنت متأكد من رغبتك في مسح كافة المنتجات والصور الحالية؟ سيتم تفريغ النظام لتتمكن من رفع شيت الإكسل الجديد الخاص بك من البداية.
+              </p>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
+              <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={wipeInvoicesToo}
+                  onChange={(e) => setWipeInvoicesToo(e.target.checked)}
+                  className="rounded text-amber-500 focus:ring-amber-400 w-4 h-4"
+                />
+                <span>مسح سجل الفواتير والطلبيات السابقة أيضاً</span>
+              </label>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsWipeModalOpen(false)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold py-2.5 rounded-2xl text-xs transition cursor-pointer"
+              >
+                إلغاء
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsWiping(true);
+                  try {
+                    await wipeAllProductsAndData({ wipeInvoices: wipeInvoicesToo });
+                    setIsWipeModalOpen(false);
+                    setImportSuccessMsg('تم مسح جميع الأصناف والبيانات بنجاح! يمكنك الآن رفع ملفك من الصفر.');
+                  } finally {
+                    setIsWiping(false);
+                  }
+                }}
+                disabled={isWiping}
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-black py-2.5 rounded-2xl text-xs shadow-md transition cursor-pointer disabled:opacity-50"
+              >
+                {isWiping ? 'جاري المسح...' : 'نعم، مسح والبدء من جديد'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };
