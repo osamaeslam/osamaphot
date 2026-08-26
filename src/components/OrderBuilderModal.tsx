@@ -89,12 +89,18 @@ export const OrderBuilderModal: React.FC<OrderBuilderModalProps> = ({
     const cRepName = (c.salesRepName || c.repName || '').trim().toLowerCase();
     const cRepId = (c.repId || '').trim().toLowerCase();
 
-    if (!cRepName && !cRepId) return true; // Unassigned customers are accessible
+    // If repId is set and matches, definitely belongs to this rep
+    if (cRepId && cRepId === currentId) return true;
+    // If repId is set and doesn't match, definitely does NOT belong
+    if (cRepId && cRepId !== currentId) return false;
+
+    // Fallback to name matching when no repId
+    if (!cRepName) return true; // Unassigned customers are accessible
     return (
       cRepName === currentName ||
       cRepName === currentUsername ||
-      cRepName.includes(currentName) ||
-      (cRepId && cRepId === currentId)
+      currentName.includes(cRepName) ||
+      cRepName.includes(currentName)
     );
   };
 
