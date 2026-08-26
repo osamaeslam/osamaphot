@@ -1593,20 +1593,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'سلة الطلبية فارغة! يرجى إضافة أصناف أولاً.' };
     }
 
-    // 1. Strict Real-Time Concurrency Check across all items in cart
+    // Submitting a request does not check, reserve, transfer, or deduct stock.
+    // Stock availability is validated only after an authorized supervisor/manager clicks approval.
     for (const item of cart) {
       const currentProd = products.find((p) => p.id === item.product.id);
       if (!currentProd) {
-        return { success: false, message: `الصنف (${item.product.name}) لم يعد متوفراً بالسيستم!` };
-      }
-      const availableCartons = Math.max(0, currentProd.branchStockReserved) + Math.max(0, currentProd.mainWarehouseReserved);
-      if (item.cartonCount > availableCartons) {
-        return {
-          success: false,
-          message: `عفواً، تعذر اعتماد الطلبية: الصنف (${currentProd.name}) لم يعد متوفراً بالكمية المطلوبة (المتبقي فقط ${availableCartons} كرتونة بسبب طلبية مندوب آخر تم تسجيلها للتو)! يرجى تعديل السلة.`
-        };
+        return { success: false, message: 'أحد الأصناف لم يعد موجوداً في النظام.' };
       }
     }
+
 
     const newInvoiceNumber = `DRM-${new Date().getFullYear()}-${String(invoices.length + 104).padStart(4, '0')}`;
     const now = new Date();
@@ -1617,6 +1612,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? users.find((u) => u.id === currentUser.supervisorId)?.name
       : 'مشرف عام الفرع';
 
+    // Sales reps only submit a request. Approval, transfer, and stock deduction belong to supervisors/managers.
     const isDirectManager = currentUser?.role === 'admin' || currentUser?.role === 'branch_manager';
     const initialStatus: OrderStatus = isDirectManager ? 'معتمدة ومصروفة من المخزن' : 'قيد مراجعة المشرف';
 
@@ -1763,7 +1759,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    // Deduct / Reserve Stock in Products (Smart Proportional Split across Branch and Main Central Warehouse)
+    // A sales rep submission must not reserve, transfer, or deduct stock.
+    // Stock is changed only when an authorized supervisor/manager approves the order.
+    if (isDirectManager) {
     setProducts((prev) => {
       return prev.map((p) => {
         const cartItem = cart.find((c) => c.product.id === p.id);
@@ -1794,9 +1792,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       });
     });
+    }
 
-    // Record inventory audit logs for each item
-    cart.forEach((item) => {
+    // Only authorized approval actions create inventory audit movements.
+    if (isDirectManager) cart.forEach((item) => {
       const prod = products.find((p) => p.id === item.product.id);
       const isFromMain = item.fulfillFromMainWarehouse;
       const beforeReserved = prod ? (isFromMain ? prod.mainWarehouseReserved : prod.branchStockReserved) : 0;
@@ -1909,14 +1908,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       shortageInvoice: createdShortageInvoice,
       message: createdShortageInvoice
         ? `تم إصدار الفاتورة الأساسية #${primaryInvoice.invoiceNumber} وفاتورة النواقص المحولة #${createdShortageInvoice.invoiceNumber} بنجاح!`
-        : `تم تسجيل الطلبية #${primaryInvoice.invoiceNumber} بنجاح وحجز الأصناف بالمخزن!`
+        : `تم تسجيل الطلبية #${primaryInvoice.invoiceNumber} وإرسالها للمراجعة والاعتماد!`
     };
   };
 
   // Supervisor / Manager approves order & discharges physical stock
   const approveOrder = (invoiceId: string, notes?: string): { success: boolean; message: string } => {
-    const inv = invoices.find((i) => i.id === invoiceId);
-    if (!inv) return { success: false, message: 'الطلبية غير موجودة' };
+  if (!currentUser || !['supervisor', 'branch_manager', 'admin', 'developer'].includes(currentUser.role)) {
+  return { success: false, message: 'المندوب لا يملك صلاحية اعتماد الطلبية أو صرف المخزون.' };
+  }
+  const inv = invoices.find((i) => i.id === invoiceId);
+  if (!inv) return { success: false, message: 'الطلبية غير موجودة' };
     if (inv.status === 'معتمدة ومصروفة من المخزن') {
       return { success: false, message: 'الطلبية معتمدة ومصروفة بالفعل' };
     }
@@ -2009,7 +2011,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Supervisor escalates / forwards to Branch Manager
   const forwardOrderToManager = (invoiceId: string, notes?: string): { success: boolean; message: string } => {
-    const inv = invoices.find((i) => i.id === invoiceId);
+  if (!currentUser || currentUser.role !== 'supervisor') {
+  return { success: false, message: 'تحويل الطلبية لمدير الفرع متاح للمشرف فقط.' };
+  }
+  const inv = invoices.find((i) => i.id === invoiceId);
     if (!inv) return { success: false, message: 'الطلبية غير موجودة' };
 
     setInvoices((prev) =>
