@@ -272,7 +272,14 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
   // Active users filtered
   const activeUsers = users.filter((u) => {
     if (u.approvalStatus === 'pending_approval') return false;
-    if (selectedBranchFilter !== 'الكل' && u.branchName !== selectedBranchFilter) return false;
+
+    // Strict Branch Filter: Admin & Dev can see all branches, while Supervisor / Branch Manager / Rep only see their own branch
+    if (!isSuperAdminOrDev) {
+      if (u.branchName !== currentUser?.branchName) return false;
+    } else {
+      if (selectedBranchFilter !== 'الكل' && u.branchName !== selectedBranchFilter) return false;
+    }
+
     if (selectedRoleFilter !== 'الكل' && u.role !== selectedRoleFilter) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
@@ -298,42 +305,6 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
     setApprovingUser(null);
   };
 
-  // Smart Auto-Generator for Username & Email based on name
-  const handleAutoGenerateCredentials = (fullName: string, role: UserRole = formData.role || 'sales_rep') => {
-    if (!fullName.trim()) return;
-
-    // Convert Arabic or English name to slug
-    const cleaned = fullName
-      .trim()
-      .toLowerCase()
-      .replace(/[^\w\s\u0600-\u06FF]/g, '')
-      .split(/\s+/)
-      .slice(0, 2);
-
-    let prefix = 'rep';
-    if (role === 'admin') prefix = 'admin';
-    else if (role === 'developer') prefix = 'dev';
-    else if (role === 'branch_manager') prefix = 'mgr';
-    else if (role === 'supervisor') prefix = 'sup';
-
-    let suggestedUsername = '';
-    if (/^[a-zA-Z0-9_]+$/.test(cleaned.join(''))) {
-      suggestedUsername = `${prefix}_${cleaned.join('_')}`;
-    } else {
-      // Romanize or numeric deterministic hash
-      const hash = Math.floor(1000 + Math.random() * 9000);
-      suggestedUsername = `${prefix}_${cleaned[0] || 'user'}_${hash}`;
-    }
-
-    const suggestedEmail = `${suggestedUsername.replace(/[^a-zA-Z0-9_]/g, '')}@dream-dist.com`;
-
-    setFormData((prev) => ({
-      ...prev,
-      username: suggestedUsername,
-      email: suggestedEmail,
-    }));
-  };
-
   const handleOpenAddModal = () => {
     setEditingUser(null);
     setShowPassword(false);
@@ -343,7 +314,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
       email: '',
       password: '',
       role: 'sales_rep',
-      branchName: branches[0]?.name || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
+      branchName: isSuperAdminOrDev ? (branches[0]?.name || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)') : (currentUser?.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)'),
       supervisorId: '',
       phone: '',
       commissionRate: 2.5,
@@ -366,20 +337,29 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
 
   const handleSaveUser = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.username || !isSuperAdminOrDev) return;
+    if (!formData.name?.trim() || !formData.email?.trim() || !isSuperAdminOrDev) return;
+
+    const cleanEmail = formData.email.trim().toLowerCase();
+    const cleanUsername = cleanEmail.includes('@') ? cleanEmail.split('@')[0] : cleanEmail;
 
     if (editingUser) {
-      updateUser({ ...editingUser, ...formData } as User);
+      updateUser({
+        ...editingUser,
+        ...formData,
+        name: formData.name.trim(),
+        email: cleanEmail,
+        username: formData.username?.trim() || cleanUsername,
+      } as User);
       setEditingUser(null);
     } else {
       const newUser: User = {
         id: `u-${Date.now()}`,
-        name: formData.name || '',
-        username: (formData.username || '').trim().toLowerCase(),
-        email: formData.email || `${formData.username}@dream-dist.com`,
+        name: formData.name.trim(),
+        username: cleanUsername,
+        email: cleanEmail,
         password: formData.password || '',
         role: formData.role || 'sales_rep',
-        branchName: formData.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
+        branchName: formData.branchName || currentUser?.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
         supervisorId: formData.role === 'sales_rep' ? (formData.supervisorId || undefined) : undefined,
         phone: formData.phone || '',
         avatar: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80`,
@@ -394,13 +374,13 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
   };
 
   const handleCopyUserCredentials = (user: User) => {
-    const credText = `بيانات الدخول لمنظومة شركة دريم:
-الاسم: ${user.name}
+    const credText = `بيانات الدخول لمنظومة شركة دريم للتجارة والتوزيع:
+الاسم المعتمد: ${user.name}
 الصفة: ${roleConfigs[user.role]?.label || user.role}
 الفرع: ${user.branchName}
-اسم المستخدم: ${user.username}
+البريد الإلكتروني لتسجيل الدخول: ${user.email}
 كلمة المرور: ${user.password || '(كلمة المرور الخاصة بالمستخدم)'}
-رابط التطبيق: ${window.location.origin}`;
+رابط المنظومة: ${window.location.origin}`;
 
     navigator.clipboard.writeText(credText);
     setCopiedCredentials(user.id);
@@ -989,10 +969,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                       <button
                         type="button"
                         key={rKey}
-                        onClick={() => {
-                          setFormData((prev) => ({ ...prev, role: rKey }));
-                          if (formData.name) handleAutoGenerateCredentials(formData.name, rKey);
-                        }}
+                        onClick={() => setFormData((prev) => ({ ...prev, role: rKey }))}
                         className={`p-3 rounded-2xl border text-right transition-all flex flex-col justify-between cursor-pointer ${
                           isSelected
                             ? `border-slate-900 ring-2 ring-slate-900 bg-slate-900 text-white shadow-md`
@@ -1015,56 +992,46 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                 </div>
               </div>
 
-              {/* 2. EMPLOYEE DETAILS (Name, Auto Generator) */}
+              {/* 2. EMPLOYEE DETAILS (Name, Login Email, Password) */}
               <div className="space-y-3 pt-2 border-t border-slate-100">
-                <div className="flex items-center justify-between">
-                  <label className="font-black text-slate-800 text-xs sm:text-sm">
-                    2. البيانات الشخصية وبيانات الدخول *
-                  </label>
-                  {formData.name && (
-                    <button
-                      type="button"
-                      onClick={() => handleAutoGenerateCredentials(formData.name || '', formData.role)}
-                      className="text-amber-700 hover:text-amber-800 font-black text-[11px] flex items-center gap-1 bg-amber-50 px-2 py-1 rounded-lg border border-amber-200 cursor-pointer"
-                    >
-                      <Sparkles className="w-3 h-3 text-amber-600" />
-                      <span>توليد تلقائي للاسم والبريد</span>
-                    </button>
-                  )}
-                </div>
+                <label className="block font-black text-slate-800 text-xs sm:text-sm">
+                  2. البيانات الشخصية وبيانات الدخول *
+                </label>
 
                 {/* Full Name */}
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">الاسم بالكامل *</label>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    الاسم بالكامل (اسم المندوب / الموظف المربوط بالعملاء وفواتير البيع) <span className="text-rose-600">*</span>
+                  </label>
                   <input
                     type="text"
                     required
                     value={formData.name || ''}
-                    onChange={(e) => {
-                      const newName = e.target.value;
-                      setFormData({ ...formData, name: newName });
-                    }}
-                    placeholder="مثال: أحمد عبد الله الشناوي"
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="مثال: أسامة الشناوي"
                     className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-900 focus:ring-2 focus:ring-amber-400 focus:bg-white transition text-xs sm:text-sm"
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    💡 هذا الاسم سيظهر تلقائياً للعملاء على الفواتير وشيتات الإكسل وأوامر الشغل.
+                  </p>
                 </div>
 
-                {/* Username + Password in responsive grid */}
+                {/* Email (Primary Login) & Password */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block font-bold text-slate-700 mb-1">
-                      اسم المستخدم الموحد (Login Username) <span className="text-rose-600">*</span>
+                      البريد الإلكتروني لتسجيل الدخول (Login Email) <span className="text-rose-600">*</span>
                     </label>
                     <input
-                      type="text"
+                      type="email"
                       required
-                      value={formData.username || ''}
-                      onChange={(e) => setFormData({ ...formData, username: e.target.value.toLowerCase().replace(/\s+/g, '_') })}
-                      placeholder="rep_ahmed"
+                      value={formData.email || ''}
+                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                      placeholder="مثال: osama@dream.com"
                       className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-slate-900 text-xs"
                     />
                     <p className="text-[10px] text-slate-500 mt-1">
-                      💡 اسم المستخدم موحد لربط حساب المندوب بعملائه وفواتيره في النظام.
+                      🔐 يستخدمه الموظف لتسجيل الدخول في النظام مباشرة.
                     </p>
                   </div>
 
@@ -1084,35 +1051,22 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                       type={showPassword ? 'text' : 'password'}
                       value={formData.password || ''}
                       onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                      placeholder="أدخل كلمة مرور قوية"
+                      placeholder="أدخل كلمة مرور الحساب"
                       className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-slate-900 text-xs"
                     />
                   </div>
                 </div>
 
-                {/* Email + Phone */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">البريد الإلكتروني</label>
-                    <input
-                      type="email"
-                      value={formData.email || ''}
-                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                      placeholder="user@example.com"
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-slate-800 text-xs"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">رقم الهاتف / الواتساب</label>
-                    <input
-                      type="tel"
-                      value={formData.phone || ''}
-                      onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                      placeholder="010XXXXXXXX"
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs"
-                    />
-                  </div>
+                {/* Phone */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">رقم الهاتف / الواتساب</label>
+                  <input
+                    type="tel"
+                    value={formData.phone || ''}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    placeholder="مثال: 010XXXXXXXX"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs"
+                  />
                 </div>
               </div>
 
@@ -1129,7 +1083,8 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                     <select
                       value={formData.branchName}
                       onChange={(e) => setFormData({ ...formData, branchName: e.target.value, supervisorId: '' })}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs cursor-pointer"
+                      disabled={!isSuperAdminOrDev}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs cursor-pointer disabled:opacity-70 disabled:bg-slate-100"
                     >
                       {branches.map((b) => (
                         <option key={b.id} value={b.name}>
@@ -1174,7 +1129,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                     </div>
                     <div>
                       <div className="font-black text-sm text-slate-100">{formData.name || 'اسم الموظف'}</div>
-                      <div className="text-[10px] text-amber-300 font-mono">@{formData.username || 'username'} • {formData.branchName}</div>
+                      <div className="text-[10px] text-amber-300 font-mono">{formData.email || 'user@dream.com'} • {formData.branchName}</div>
                     </div>
                   </div>
                   <span className="bg-amber-500/20 border border-amber-400 text-amber-300 text-[10px] font-black px-2.5 py-1 rounded-xl">

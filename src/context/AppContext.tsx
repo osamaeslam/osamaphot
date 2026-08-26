@@ -2266,42 +2266,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const getVisibleInvoices = (): Invoice[] => {
     if (!currentUser) return [];
 
-    // Admin sees all invoices across all branches
-    if (currentUser.role === 'admin') {
+    // Admin & Developer see all invoices across all branches (or filtered by selected branch)
+    if (currentUser.role === 'admin' || currentUser.role === 'developer') {
       if (selectedBranchFilter !== 'الكل') {
         return invoices.filter(i => i.branchName === selectedBranchFilter);
       }
       return invoices;
     }
 
-    // Branch Manager sees all invoices of his branch
+    // Branch Manager sees all invoices of their specific branch
     if (currentUser.role === 'branch_manager') {
       return invoices.filter(i => i.branchName === currentUser.branchName);
     }
 
-    // Supervisor sees invoices of reps assigned to him + his own branch
+    // Supervisor sees invoices of reps in their branch or assigned directly to them
     if (currentUser.role === 'supervisor') {
       const myReps = users.filter(u => u.supervisorId === currentUser.id).map(u => u.id);
       return invoices.filter(
-        i => i.repId === currentUser.id || myReps.includes(i.repId) || i.supervisorName === currentUser.name
+        i => (i.branchName === currentUser.branchName && (i.repId === currentUser.id || myReps.includes(i.repId) || i.supervisorName === currentUser.name)) ||
+             myReps.includes(i.repId) ||
+             i.supervisorName === currentUser.name
       );
     }
 
     // Sales Rep: STRICT PRIVACY - ONLY his own invoices
-    return invoices.filter(i => i.repId === currentUser.id);
+    return invoices.filter(i => i.repId === currentUser.id || i.repName === currentUser.name);
   };
 
   const getVisibleProducts = (): Product[] => {
     if (!currentUser) return products;
 
-    if (currentUser.role === 'admin') {
+    if (currentUser.role === 'admin' || currentUser.role === 'developer') {
       if (selectedBranchFilter !== 'الكل') {
         return products.filter(p => !p.branchName || p.branchName === selectedBranchFilter || p.mainWarehouseActual > 0);
       }
       return products;
     }
 
-    // Reps & Branch users only see items in their branch or available from central warehouse
+    // Reps & Branch supervisors only see items in their branch or available from central warehouse
     return products.filter(
       p => !p.branchName || p.branchName === currentUser.branchName || p.mainWarehouseActual > 0
     );

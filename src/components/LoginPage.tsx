@@ -105,20 +105,20 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onSuccess }) => {
               </div>
             )}
 
-            {/* Identifier */}
+            {/* Identifier (Email / Username) */}
             <div>
               <label className="block text-xs font-bold text-slate-300 mb-1.5 text-right">
-                اسم المستخدم أو البريد الإلكتروني أو الهاتف
+                البريد الإلكتروني لتسجيل الدخول (أو اسم المستخدم)
               </label>
               <div className="relative">
                 <input
                   type="text"
                   value={loginIdentifier}
                   onChange={(e) => setLoginIdentifier(e.target.value)}
-                  placeholder="مثال: osama أو Osama@dream.com أو 01000000001"
+                  placeholder="مثال: osama@dream.com أو osama"
                   required
                   autoComplete="username"
-                  className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none transition pr-10"
+                  className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none transition pr-10 font-mono"
                 />
                 <UserIcon className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
               </div>
