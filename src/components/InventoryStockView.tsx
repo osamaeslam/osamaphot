@@ -117,9 +117,14 @@ export const InventoryStockView: React.FC = () => {
   }, [products]);
 
   // Filtered Products Matrix
+  const visibleBranch = currentUser && currentUser.role !== 'admin' && currentUser.role !== 'developer'
+    ? currentUser.branchName
+    : selectedBranchFilter;
+
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
-      if (selectedBranchFilter !== 'الكل' && p.branchName && p.branchName !== selectedBranchFilter) {
+      // Branch managers, supervisors, and reps never see another branch's stock.
+      if (visibleBranch !== 'الكل' && visibleBranch && p.branchName && p.branchName !== visibleBranch) {
         if (p.mainWarehouseActual <= 0 && p.branchStockActual <= 0) return false;
       }
 
@@ -593,6 +598,32 @@ export const InventoryStockView: React.FC = () => {
                   </button>
                 )}
               </div>
+            </div>
+
+            {/* Branch scope: non-admin users are locked to their assigned branch */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center gap-2 text-xs font-black text-slate-700">
+                <Building className="h-4 w-4 text-amber-600" />
+                <span>المخزون المعروض</span>
+              </div>
+              {currentUser?.role === 'admin' || currentUser?.role === 'developer' ? (
+                <select
+                  value={selectedBranchFilter}
+                  onChange={(event) => setSelectedBranchFilter(event.target.value)}
+                  className="min-w-56 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                  aria-label="اختيار فرع المخزون"
+                >
+                  <option value="الكل">كل الفروع والمخزن الرئيسي</option>
+                  {branches.map((branch) => (
+                    <option key={branch.id} value={branch.name}>{branch.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <span className="rounded-xl bg-amber-100 px-3 py-2 text-xs font-black text-amber-950">
+                  {currentUser?.branchName || 'الفرع المحدد بالحساب'}
+                </span>
+              )}
+              <span className="text-[11px] font-semibold text-slate-500">الفرع ثم المخزن الرئيسي عند اعتماد الطلبية</span>
             </div>
 
             {/* Quick Filter Buttons (Pills) */}

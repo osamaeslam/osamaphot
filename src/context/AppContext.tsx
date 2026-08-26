@@ -820,7 +820,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .toLowerCase()
         .replace(/[أإآ]/g, 'ا')
         .replace(/ة/g, 'ه')
-        .replace(/ى/g, 'ي')
+        .replace(/��/g, 'ي')
         .replace(/ؤ/g, 'و')
         .replace(/ئ/g, 'ي')
         .replace(/ء/g, '')
@@ -1921,17 +1921,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'الطلبية معتمدة ومصروفة بالفعل' };
     }
 
-    // Deduct physical actual stock now that supervisor/manager has approved
-    setProducts((prev) => {
-      return prev.map((p) => {
-        const invItem = inv.items.find((it) => it.productId === p.id);
-        if (!invItem) return p;
+    // Deduct physical stock only at approval: branch first, then central warehouse.
+    // The whole approval is rejected before any state changes if one item cannot be fulfilled.
+    const allocations = new Map<string, { branch: number; main: number }>();
+    for (const invItem of inv.items) {
+      const product = products.find((p) => p.id === invItem.productId);
+      if (!product) return { success: false, message: `الصنف (${invItem.productName}) غير موجود في المخزون` };
+      const requested = Math.max(0, invItem.cartonCount || 0);
+      const branchAvailable = Math.max(0, product.branchStockActual);
+      const mainAvailable = Math.max(0, product.mainWarehouseActual);
+      const branch = Math.min(requested, branchAvailable);
+      const main = requested - branch;
+      if (main > mainAvailable) {
         return {
-          ...p,
-          branchStockActual: Math.max(0, p.branchStockActual - invItem.cartonCount),
+          success: false,
+          message: `لا يمكن اعتماد الطلبية: الصنف (${product.name}) يحتاج ${requested} كرتونة، المتاح ${branchAvailable} بالفرع و${mainAvailable} بالمخزن الرئيسي.`,
         };
-      });
-    });
+      }
+      allocations.set(invItem.productId, { branch, main });
+    }
+
+    setProducts((prev) => prev.map((p) => {
+      const allocation = allocations.get(p.id);
+      if (!allocation) return p;
+      return {
+        ...p,
+        branchStockActual: Math.max(0, p.branchStockActual - allocation.branch),
+        branchStockReserved: Math.max(0, p.branchStockReserved - allocation.branch),
+        mainWarehouseActual: Math.max(0, p.mainWarehouseActual - allocation.main),
+        mainWarehouseReserved: Math.max(0, p.mainWarehouseReserved - allocation.main),
+      };
+    }));
 
     // Log transaction
     inv.items.forEach((item) => {
