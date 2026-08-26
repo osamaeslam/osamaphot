@@ -9,11 +9,16 @@ import {
 } from '../data/mockData';
 import { DEFAULT_CLOUDINARY_CONFIG } from '../services/cloudinaryService';
 import { clearCachedImages } from '../services/imageCacheService';
+import { idbClear, idbDelete, idbGet, idbSet, safeLocalStorageSet } from '../services/storageService';
 import {
+  deleteUserFromSupabase,
   fetchCustomersFromSupabase,
   fetchInvoicesFromSupabase,
   fetchProductsFromSupabase,
   fetchUsersFromSupabase,
+  findUserInSupabase,
+  sanitizeEmail,
+  sanitizeIdentifier,
   saveCustomersToSupabase,
   saveInvoiceToSupabase,
   saveProductsToSupabase,
@@ -66,9 +71,10 @@ interface AppContextType {
   updateCustomer: (customer: Customer) => void;
   deleteCustomer: (customerId: string) => void;
   importCustomersList: (newCustomers: Customer[], mode?: 'merge' | 'replace') => void;
+  cleanAndDeduplicateCustomers: () => { originalCount: number; deduplicatedCount: number; duplicatesRemoved: number };
 
   // Auth actions
-  login: (identifier: string, password?: string) => { success: boolean; message: string; user?: User };
+  login: (identifier: string, password?: string) => Promise<{ success: boolean; message: string; user?: User }>;
   register: (userData: {
     name: string;
     username: string;
@@ -156,7 +162,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 const STORAGE_KEYS = {
   PRODUCTS: 'dream_dist_products_v9',
   INVOICES: 'dream_dist_invoices_v9',
-  USERS: 'dream_dist_users_v9',
+  USERS: 'dream_dist_users_v10',
   BRANCHES: 'dream_dist_branches_v9',
   CUSTOMERS: 'dream_dist_customers_v9',
   CLOUDINARY: 'dream_dist_cloudinary_v9',
@@ -222,12 +228,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!saved) return INITIAL_USERS;
     try {
       const parsed: User[] = JSON.parse(saved);
-      return parsed.map((u) => ({
-        ...u,
-        name: u.id === 'u-admin-osama' ? 'أسامة إسلام (المطور التقني)' : u.name,
-        branchName: normalizeBranchName(u.branchName),
-        role: u.role === 'developer' || u.role === 'admin' || u.role === 'branch_manager' || u.role === 'supervisor' || u.role === 'sales_rep' ? u.role : 'sales_rep',
-      }));
+      const filtered = parsed
+        .filter((u) => u.id !== 'u-branch-ashraf' && u.id !== 'u-sup-mahmoud' && u.id !== 'u-rep-ahmed')
+        .map((u) => ({
+          ...u,
+          name: u.id === 'u-admin-osama' ? 'أسامة إسلام (المطور التقني)' : u.name,
+          branchName: normalizeBranchName(u.branchName),
+          role: u.role === 'developer' || u.role === 'admin' || u.role === 'branch_manager' || u.role === 'supervisor' || u.role === 'sales_rep' ? u.role : 'sales_rep',
+        }));
+      return filtered.length > 0 ? filtered : INITIAL_USERS;
     } catch {
       return INITIAL_USERS;
     }
@@ -281,6 +290,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const sanitizeCustomers = (list: Customer[]): Customer[] => {
+    if (!Array.isArray(list)) return [];
+    const map = new Map<string, Customer>();
+
+    for (const c of list) {
+      if (!c) continue;
+      const cleanCode = (c.code || '').trim().toLowerCase();
+      const cleanName = (c.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const cleanPhone = (c.phone || '').replace(/[^0-9]/g, '');
+
+      let key = '';
+      if (cleanCode && cleanCode !== '---' && !cleanCode.startsWith('cust-row') && !/^cust-\d+$/i.test(cleanCode)) {
+        key = `code:::${cleanCode}`;
+      } else if (cleanName && cleanPhone.length >= 7) {
+        key = `name_phone:::${cleanName}:::${cleanPhone}`;
+      } else if (cleanName) {
+        key = `name:::${cleanName}`;
+      } else if (cleanPhone.length >= 8) {
+        key = `phone:::${cleanPhone}`;
+      } else {
+        key = `id:::${c.id || Math.random()}`;
+      }
+
+      const existing = map.get(key);
+      if (existing) {
+        // Merge attributes to keep the best data
+        if (!existing.phone && c.phone) existing.phone = c.phone;
+        if (!existing.address && c.address) existing.address = c.address;
+        if (!existing.taxNumber && c.taxNumber) existing.taxNumber = c.taxNumber;
+        if (!existing.notes && c.notes) existing.notes = c.notes;
+        if (c.repName && (!existing.repName || existing.repName === 'مندوب المبيعات')) existing.repName = c.repName;
+        if (c.tier === 'مميز' || (c.tier === 'راقي' && existing.tier === 'متوسط')) {
+          existing.tier = c.tier;
+        }
+      } else {
+        map.set(key, {
+          ...c,
+          name: c.name || `عميل ${c.code || ''}`,
+          branchName: normalizeBranchName(c.branchName || 'الفرع الرئيسي'),
+        });
+      }
+    }
+
+    return Array.from(map.values());
+  };
+
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
     try {
@@ -293,7 +348,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [customers, setCustomers] = useState<Customer[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
-    return saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
+    try {
+      const raw = saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
+      return sanitizeCustomers(raw);
+    } catch {
+      return INITIAL_CUSTOMERS;
+    }
   });
 
   const [invoices, setInvoices] = useState<Invoice[]>(() => {
@@ -324,7 +384,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   useEffect(() => {
-    localStorage.setItem('dream_dist_audit_logs_v7', JSON.stringify(auditLogs));
+    idbSet('dream_dist_audit_logs_v7', auditLogs);
+    safeLocalStorageSet('dream_dist_audit_logs_v7', JSON.stringify(auditLogs));
   }, [auditLogs]);
 
   const recordAuditLog = (logData: Omit<AuditLog, 'id' | 'timestamp' | 'formattedTime'>) => {
@@ -356,10 +417,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return saved === 'true';
   });
 
+  // Hydrate high-capacity collections from IndexedDB seamlessly on startup
+  useEffect(() => {
+    let isMounted = true;
+    async function hydrateFromIndexedDB() {
+      try {
+        // Clean up legacy large keys from localStorage to prevent quota overflow
+        try {
+          localStorage.removeItem(STORAGE_KEYS.PRODUCTS);
+          localStorage.removeItem(STORAGE_KEYS.INVOICES);
+          localStorage.removeItem(STORAGE_KEYS.CUSTOMERS);
+        } catch {
+          // ignore
+        }
+
+        const [idbProducts, idbInvoices, idbCustomers, idbUsers] = await Promise.all([
+          idbGet<Product[]>(STORAGE_KEYS.PRODUCTS),
+          idbGet<Invoice[]>(STORAGE_KEYS.INVOICES),
+          idbGet<Customer[]>(STORAGE_KEYS.CUSTOMERS),
+          idbGet<User[]>(STORAGE_KEYS.USERS),
+        ]);
+
+        if (!isMounted) return;
+
+        if (idbProducts && Array.isArray(idbProducts) && idbProducts.length > 0) {
+          setProducts(sanitizeProducts(idbProducts));
+        }
+        if (idbInvoices && Array.isArray(idbInvoices) && idbInvoices.length > 0) {
+          setInvoices(idbInvoices);
+        }
+        if (idbCustomers && Array.isArray(idbCustomers) && idbCustomers.length > 0) {
+          setCustomers(sanitizeCustomers(idbCustomers));
+        }
+        if (idbUsers && Array.isArray(idbUsers) && idbUsers.length > 0) {
+          setUsers((prev) => {
+            const map = new Map<string, User>();
+            prev.forEach((u) => map.set(u.id, u));
+            idbUsers.forEach((u) => map.set(u.id, u));
+            return Array.from(map.values());
+          });
+        }
+      } catch (err) {
+        console.warn('IndexedDB initial hydration notice:', err);
+      }
+    }
+
+    hydrateFromIndexedDB();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const toggleDataSaverMode = () => {
     setDataSaverMode((prev) => {
       const next = !prev;
-      localStorage.setItem('dream_dist_data_saver', String(next));
+      safeLocalStorageSet('dream_dist_data_saver', String(next));
       return next;
     });
   };
@@ -478,8 +590,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Initial Supabase connection check, fetch users, invoices & real-time sync
+  // Initial Supabase connection check, fetch users, products, invoices & real-time sync
   useEffect(() => {
+    // 0. Load offline items from IndexedDB if present
+    idbGet<Product[]>(STORAGE_KEYS.PRODUCTS).then((idbProducts) => {
+      if (idbProducts && idbProducts.length > 0) {
+        setProducts((prev) => {
+          if (prev.length <= INITIAL_PRODUCTS.length) {
+            return sanitizeProducts(idbProducts);
+          }
+          return prev;
+        });
+      }
+    });
+
+    idbGet<Customer[]>(STORAGE_KEYS.CUSTOMERS).then((idbCustomers) => {
+      if (idbCustomers && idbCustomers.length > 0) {
+        setCustomers(idbCustomers);
+      }
+    });
+
+    idbGet<Invoice[]>(STORAGE_KEYS.INVOICES).then((idbInvoices) => {
+      if (idbInvoices && idbInvoices.length > 0) {
+        setInvoices(idbInvoices);
+      }
+    });
+
     testSupabaseConnection().then((status) => {
       setSupabaseStatus(status);
       if (status.connected) {
@@ -495,7 +631,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         });
 
-        // 2. Fetch Invoices
+        // 2. Fetch Central Catalog from Supabase (Propagates Admin/Developer uploads to all reps and supervisors)
+        fetchProductsFromSupabase().then((res) => {
+          if (res.success && res.products && res.products.length > 0) {
+            setProducts((prev) => {
+              // Merge remote products while preserving local reserved counts
+              const localMap = new Map<string, Product>();
+              prev.forEach((p) => localMap.set(p.id, p));
+              const merged = res.products!.map((remoteP) => {
+                const localP = localMap.get(remoteP.id);
+                if (!localP) return remoteP;
+                return {
+                  ...remoteP,
+                  branchStockReserved: localP.branchStockReserved < remoteP.branchStockActual ? localP.branchStockReserved : remoteP.branchStockActual,
+                  mainWarehouseReserved: localP.mainWarehouseReserved < remoteP.mainWarehouseActual ? localP.mainWarehouseReserved : remoteP.mainWarehouseActual,
+                };
+              });
+              return sanitizeProducts(merged);
+            });
+          }
+        });
+
+        // 3. Fetch Invoices
         fetchInvoicesFromSupabase().then((res) => {
           if (res.success && res.invoices && res.invoices.length > 0) {
             setInvoices((prev) => {
@@ -509,7 +666,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
-    // Setup Supabase Realtime Subscription for Invoices & Users
+    // Setup Supabase Realtime Subscription for Invoices, Orders (Catalog Sync) & Users
     try {
       const channel = supabase
         .channel('schema-db-changes')
@@ -559,6 +716,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           }
         })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const raw = payload.new as any;
+            if (raw && raw.id === '00000000-0000-0000-0000-000000000001' && raw.items) {
+              const remoteProducts: Product[] = Array.isArray(raw.items)
+                ? raw.items
+                : typeof raw.items === 'string'
+                ? JSON.parse(raw.items)
+                : [];
+              if (remoteProducts.length > 0) {
+                setProducts(sanitizeProducts(remoteProducts));
+              }
+            }
+          }
+        })
         .subscribe();
 
       return () => {
@@ -594,60 +766,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCustomers((prev) => prev.filter((c) => c.id !== customerId));
   };
 
-  const importCustomersList = (newCustomers: Customer[], mode: 'merge' | 'replace' = 'merge') => {
-    if (mode === 'replace') {
-      setCustomers(newCustomers);
-    } else {
-      setCustomers((prev) => {
-        const map = new Map<string, Customer>();
-        prev.forEach((c) => map.set(c.id, c));
-        prev.forEach((c) => map.set(c.code.toLowerCase(), c));
-        newCustomers.forEach((c) => {
-          map.set(c.id, c);
-          map.set(c.code.toLowerCase(), c);
-        });
-        return Array.from(new Set(map.values()));
-      });
+  const cleanAndDeduplicateCustomers = () => {
+    const originalCount = customers.length;
+    const cleaned = sanitizeCustomers(customers);
+    const duplicatesRemoved = Math.max(0, originalCount - cleaned.length);
+    if (duplicatesRemoved > 0 || cleaned.length !== originalCount) {
+      setCustomers(cleaned);
+      saveCustomersToSupabase(cleaned).catch((e) => console.warn('Supabase customer clean save error:', e));
     }
-    saveCustomersToSupabase(newCustomers).catch((e) => console.warn('Supabase customer bulk save error:', e));
+    return {
+      originalCount,
+      deduplicatedCount: cleaned.length,
+      duplicatesRemoved,
+    };
   };
 
-  // Sync to local storage
+  const importCustomersList = (newCustomers: Customer[], mode: 'merge' | 'replace' = 'merge') => {
+    const sanitizedIncoming = sanitizeCustomers(newCustomers);
+    let finalCustomers: Customer[] = [];
+    if (mode === 'replace') {
+      finalCustomers = sanitizedIncoming;
+      setCustomers(finalCustomers);
+    } else {
+      finalCustomers = sanitizeCustomers([...customers, ...sanitizedIncoming]);
+      setCustomers(finalCustomers);
+    }
+    saveCustomersToSupabase(finalCustomers).catch((e) => console.warn('Supabase customer bulk save error:', e));
+  };
+
+  // Sync high-capacity data directly to IndexedDB (preventing LocalStorage quota overflow)
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
+    idbSet(STORAGE_KEYS.PRODUCTS, products);
   }, [products]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
+    idbSet(STORAGE_KEYS.CUSTOMERS, customers);
   }, [customers]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(invoices));
+    idbSet(STORAGE_KEYS.INVOICES, invoices);
   }, [invoices]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    idbSet(STORAGE_KEYS.USERS, users);
+    safeLocalStorageSet(STORAGE_KEYS.USERS, JSON.stringify(users));
   }, [users]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.CLOUDINARY, JSON.stringify(cloudinaryConfig));
+    safeLocalStorageSet(STORAGE_KEYS.CLOUDINARY, JSON.stringify(cloudinaryConfig));
   }, [cloudinaryConfig]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ACCOUNTING_LOGS, JSON.stringify(accountingLogs));
+    safeLocalStorageSet(STORAGE_KEYS.ACCOUNTING_LOGS, JSON.stringify(accountingLogs));
   }, [accountingLogs]);
 
   useEffect(() => {
-    localStorage.setItem('dream_dist_inv_logs_v5', JSON.stringify(inventoryLogs));
+    safeLocalStorageSet('dream_dist_inv_logs_v5', JSON.stringify(inventoryLogs));
   }, [inventoryLogs]);
 
   useEffect(() => {
     if (currentUser && isAuthenticated) {
-      localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, currentUser.id);
-      localStorage.setItem(STORAGE_KEYS.IS_AUTH, 'true');
+      safeLocalStorageSet(STORAGE_KEYS.CURRENT_USER_ID, currentUser.id);
+      safeLocalStorageSet(STORAGE_KEYS.IS_AUTH, 'true');
     } else {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
-      localStorage.setItem(STORAGE_KEYS.IS_AUTH, 'false');
+      safeLocalStorageSet(STORAGE_KEYS.IS_AUTH, 'false');
     }
   }, [currentUser, isAuthenticated]);
 
@@ -664,17 +847,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   // --- Authentication System ---
-  const login = (identifier: string, password?: string): { success: boolean; message: string; user?: User } => {
-    const cleanId = identifier.trim().toLowerCase();
-    const found = users.find(
+  const login = async (identifier: string, password?: string): Promise<{ success: boolean; message: string; user?: User }> => {
+    const cleanId = sanitizeIdentifier(identifier).toLowerCase();
+    const cleanEmail = sanitizeEmail(identifier);
+    const rawTrim = sanitizeIdentifier(identifier);
+    const cleanPass = (password || '').trim();
+
+    // 1. Search in local memory first with rich identifier matching
+    let found = users.find(
       (u) =>
-        u.email.toLowerCase() === cleanId ||
-        u.username.toLowerCase() === cleanId ||
-        u.phone === identifier.trim()
+        (u.email && sanitizeEmail(u.email) === cleanEmail) ||
+        (u.email && u.email.toLowerCase().startsWith(cleanId)) ||
+        (u.username && sanitizeIdentifier(u.username).toLowerCase() === cleanId) ||
+        (u.name && sanitizeIdentifier(u.name).toLowerCase() === cleanId) ||
+        (u.phone && sanitizeIdentifier(u.phone) === rawTrim) ||
+        (u.id && String(u.id).toLowerCase() === cleanId)
     );
 
+    // 2. If not found locally, query Supabase directly (essential for fresh sessions and cloud users)
     if (!found) {
-      return { success: false, message: 'اسم المستخدم أو البريد الإلكتروني غير مسجل في النظام' };
+      try {
+        const lookupQuery = cleanEmail.includes('@') ? cleanEmail : cleanId;
+        const supRes = await findUserInSupabase(lookupQuery);
+        if (supRes.success && supRes.user) {
+          found = supRes.user;
+          setUsers((prev) => {
+            const map = new Map<string, User>();
+            prev.forEach((u) => map.set(u.id, u));
+            map.set(found!.id, found!);
+            return Array.from(map.values());
+          });
+        }
+      } catch (e) {
+        console.warn('Direct Supabase login lookup failed:', e);
+      }
+    }
+
+    if (!found) {
+      return {
+        success: false,
+        message: 'اسم المستخدم أو البريد الإلكتروني غير مسجل في النظام. يرجى التأكد من البيانات أو مراجعة إدارة شركة دريم.'
+      };
     }
 
     if (found.approvalStatus === 'pending_approval') {
@@ -684,17 +897,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    if (found.approvalStatus === 'rejected' || !found.isActive) {
+    if (found.approvalStatus === 'rejected' || found.isActive === false) {
       return { success: false, message: 'هذا الحساب موقوف أو تم رفض تفعيله من قبل الإدارة.' };
     }
 
-    // Check password if provided (for demo/admin allow default)
-    if (found.password && password && found.password !== password && password !== 'admin123') {
-      return { success: false, message: 'كلمة المرور غير صحيحة.' };
+    // Check password strictly against database
+    if (found.password && found.password.trim().length > 0) {
+      const dbPass = found.password.trim();
+      if (dbPass !== cleanPass) {
+        return { success: false, message: 'كلمة المرور غير صحيحة. يرجى التأكد من كتابة كلمة المرور بدقة.' };
+      }
+    } else if (cleanPass) {
+      // First-time setup: user sets their password
+      found = { ...found, password: cleanPass };
+      saveUserToSupabase(found).catch((e) => console.warn('Supabase password update failed:', e));
     }
 
     setCurrentUser(found);
     setIsAuthenticated(true);
+    localStorage.setItem(STORAGE_KEYS.IS_AUTH, 'true');
+    localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, found.id);
 
     recordAuditLog({
       userId: found.id,
@@ -703,7 +925,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       branchName: found.branchName,
       action: 'user_login',
       actionTitle: `تسجيل دخول (${found.name})`,
-      details: `تم تسجيل الدخول بصلاحية (${found.role === 'admin' ? 'مدير عام' : found.role === 'branch_manager' ? 'مدير فرع' : found.role === 'supervisor' ? 'مشرف مبيعات' : 'مندوب مبيعات'}) لـ ${found.branchName}.`,
+      details: `تم تسجيل الدخول بصلاحية (${found.role === 'admin' ? 'مدير عام' : found.role === 'branch_manager' ? 'مدير فرع' : found.role === 'supervisor' ? 'مشرف مبيعات' : found.role === 'developer' ? 'مطور تقني' : 'مندوب مبيعات'}) لـ ${found.branchName}.`,
       badgeType: 'info',
     });
 
@@ -735,13 +957,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       name: userData.name.trim(),
       username: userData.username.trim().toLowerCase(),
       email: userData.email.trim().toLowerCase(),
-      password: userData.password || '123456',
+      password: (userData.password || '').trim(),
       phone: userData.phone.trim(),
-      branchName: userData.branchName || 'فرع أكتوبر (الفرع الرئيسي والمخزن المركزي)',
+      branchName: userData.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
       role: userData.role || 'sales_rep',
       supervisorId: userData.supervisorId,
       isActive: true,
-      approvalStatus: 'pending_approval', // Requires admin approval
+      approvalStatus: userData.role === 'developer' || userData.role === 'admin' ? 'active' : 'pending_approval', // Requires admin approval for reps
       registrationDate: new Date().toISOString().slice(0, 10),
       avatar: `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&auto=format&fit=crop&q=80`
     };
@@ -812,6 +1034,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteUser = (userId: string) => {
     setUsers((prev) => prev.filter((u) => u.id !== userId));
+    deleteUserFromSupabase(userId).catch((e) => console.warn('Supabase delete user failed:', e));
   };
 
   const assignSupervisor = (repId: string, supervisorId: string) => {
@@ -1163,19 +1386,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return `${cCode}:::${cColor}:::${cSize}:::${cBranch}:::${cImg || cName}`;
     };
 
+    let finalUpdated: Product[] = [];
     if (mode === 'replace') {
-      setProducts(sanitizeProducts(newProducts.map(protectReserved)));
+      finalUpdated = sanitizeProducts(newProducts.map(protectReserved));
+      setProducts(finalUpdated);
     } else {
       // Merge mode: Preserve all imported rows without collapsing identical codes
-      setProducts((prev) => {
-        const idMap = new Map<string, Product>();
-        prev.forEach((p) => idMap.set(p.id, p));
-        newProducts.forEach((p) => {
-          idMap.set(p.id, protectReserved(p));
-        });
-        return sanitizeProducts(Array.from(idMap.values()));
+      const idMap = new Map<string, Product>();
+      products.forEach((p) => idMap.set(p.id, p));
+      newProducts.forEach((p) => {
+        idMap.set(p.id, protectReserved(p));
       });
+      finalUpdated = sanitizeProducts(Array.from(idMap.values()));
+      setProducts(finalUpdated);
     }
+
+    // Persist full catalog to Supabase so reps & branch supervisors instantly receive it on all devices
+    saveProductsToSupabase(finalUpdated).catch((err) => {
+      console.warn('Supabase catalog auto-sync warning:', err);
+    });
 
     recordAuditLog({
       userId: currentUser?.id || 'admin',
@@ -1184,7 +1413,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       branchName: currentUser?.branchName || 'الفرع الرئيسي',
       action: 'import_products',
       actionTitle: `استيراد ومزامنة ${newProducts.length} صنف من شيت الإكسل (${mode === 'replace' ? 'استبدال كامل' : 'دمج وتحديث'})`,
-      details: `تم تحديث بيانات وشدات وأسعار ${newProducts.length} صنف مع الحفاظ على حجوزات المناديب النشطة.`,
+      details: `تم تحديث بيانات وشدات وأسعار ${newProducts.length} صنف مع الحفاظ على حجوزات المناديب النشطة ومزامنتها مع قاعدة البيانات المركزية.`,
       badgeType: 'info',
     });
   };
@@ -1356,7 +1585,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: formattedDate,
       time: formattedTime,
       repId: currentUser ? currentUser.id : 'u-admin-1',
-      repName: currentUser ? currentUser.name : 'أسامة إسلام (المطور والمدير العام)',
+      repName: currentUser ? currentUser.name : 'أسامة إسلام (المطور التقني)',
       supervisorName: userSupervisor,
       branchName: currentUser?.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
       items: primaryItems,
@@ -1394,7 +1623,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         date: formattedDate,
         time: formattedTime,
         repId: currentUser ? currentUser.id : 'u-admin-1',
-        repName: currentUser ? currentUser.name : 'أسامة إسلام (المطور والمدير العام)',
+        repName: currentUser ? currentUser.name : 'أسامة إسلام (المطور التقني)',
         supervisorName: userSupervisor,
         branchName: 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
         items: shortageItems,
@@ -1483,6 +1712,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return updated;
     });
+
+    // Auto-detect and register new customer or link to representative
+    if (orderData.customerName && orderData.customerName.trim() !== 'عميل تجزئة عام') {
+      const trimmedCustName = orderData.customerName.trim();
+      const existingCustIndex = customers.findIndex(
+        (c) =>
+          c.name.trim().toLowerCase() === trimmedCustName.toLowerCase() ||
+          (orderData.customerPhone && c.phone && c.phone.trim() === orderData.customerPhone.trim())
+      );
+
+      if (existingCustIndex === -1) {
+        // Create new registered customer bound to current rep
+        const newCustomerObj: Customer = {
+          id: `c-${Date.now()}`,
+          code: `CUST-${String(customers.length + 101).padStart(4, '0')}`,
+          name: trimmedCustName,
+          phone: orderData.customerPhone || '',
+          address: orderData.customerAddress || '',
+          taxNumber: orderData.customerTaxNumber || '',
+          governorate: 'القاهرة والجيزة',
+          branchName: currentUser?.branchName || 'الفرع الرئيسي',
+          salesRepName: currentUser?.name || 'مندوب المبيعات',
+          repName: currentUser?.name || 'مندوب المبيعات',
+          repId: currentUser?.id || 'rep-1',
+          tier: 'عادي',
+          balance: 0,
+          creditLimit: 50000,
+          notes: `تم تسجيل العميل تلقائياً مع الفاتورة #${primaryInvoice.invoiceNumber}`,
+          lastOrderDate: formattedDate,
+          totalOrdersCount: 1,
+          totalSpent: primaryTotals.estimatedGrandTotal,
+        };
+        setCustomers((prev) => [newCustomerObj, ...prev]);
+        saveCustomersToSupabase([newCustomerObj]).catch((e) => console.warn('Supabase customer auto-save failed:', e));
+      } else {
+        // Update stats on existing customer
+        const matched = customers[existingCustIndex];
+        const updatedCust: Customer = {
+          ...matched,
+          phone: orderData.customerPhone || matched.phone,
+          address: orderData.customerAddress || matched.address,
+          salesRepName: matched.salesRepName || currentUser?.name || 'مندوب المبيعات',
+          repName: matched.repName || currentUser?.name || 'مندوب المبيعات',
+          repId: matched.repId || currentUser?.id || 'rep-1',
+          lastOrderDate: formattedDate,
+          totalOrdersCount: (matched.totalOrdersCount || 0) + 1,
+          totalSpent: (matched.totalSpent || 0) + primaryTotals.estimatedGrandTotal,
+        };
+        setCustomers((prev) => prev.map((c) => (c.id === matched.id ? updatedCust : c)));
+        saveCustomersToSupabase([updatedCust]).catch((e) => console.warn('Supabase customer update failed:', e));
+      }
+    }
 
     // Auto push to Supabase Cloud Database
     saveInvoiceToSupabase(primaryInvoice).catch((e) => console.warn('Supabase invoice save failed:', e));
@@ -1914,11 +2195,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return p;
       });
 
-      try {
-        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(updated));
-      } catch (e) {
-        console.warn('LocalStorage limit reached while caching images');
-      }
+      idbSet(STORAGE_KEYS.PRODUCTS, updated);
+      safeLocalStorageSet(STORAGE_KEYS.PRODUCTS, JSON.stringify(updated));
 
       return updated;
     });
@@ -1926,7 +2204,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const clearAllAppData = (mode: 'cache_only' | 'full_reset' = 'cache_only') => {
     if (mode === 'full_reset') {
-      localStorage.clear();
+      try {
+        localStorage.clear();
+      } catch {}
+      idbClear();
       setProducts(INITIAL_PRODUCTS);
       setInvoices(INITIAL_INVOICES);
       setUsers(INITIAL_USERS);
@@ -1939,8 +2220,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCart([]);
       try {
         localStorage.removeItem(STORAGE_KEYS.ACCOUNTING_LOGS);
-        // Force garbage cleanup in storage
-        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
+        safeLocalStorageSet(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
       } catch (e) {
         // Safe ignore
       }
@@ -1950,16 +2230,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const wipeAllProductsAndData = async (options?: { wipeInvoices?: boolean }) => {
     setProducts([]);
     setCart([]);
-    try {
-      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.CART, JSON.stringify([]));
-    } catch (e) {}
+    idbSet(STORAGE_KEYS.PRODUCTS, []);
+    idbSet(STORAGE_KEYS.CART, []);
+    safeLocalStorageSet(STORAGE_KEYS.PRODUCTS, JSON.stringify([]));
+    safeLocalStorageSet(STORAGE_KEYS.CART, JSON.stringify([]));
 
     if (options?.wipeInvoices) {
       setInvoices([]);
-      try {
-        localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify([]));
-      } catch (e) {}
+      idbSet(STORAGE_KEYS.INVOICES, []);
+      safeLocalStorageSet(STORAGE_KEYS.INVOICES, JSON.stringify([]));
     }
 
     try {
@@ -2058,6 +2337,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateCustomer,
         deleteCustomer,
         importCustomersList,
+        cleanAndDeduplicateCustomers,
         login,
         register,
         logout,

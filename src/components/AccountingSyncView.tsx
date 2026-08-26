@@ -71,12 +71,11 @@ CREATE TABLE IF NOT EXISTS public.users (
   name TEXT NOT NULL,
   username TEXT UNIQUE NOT NULL,
   email TEXT UNIQUE NOT NULL,
-  password TEXT DEFAULT '123456',
+  password TEXT,
   role TEXT NOT NULL CHECK (role IN ('admin', 'branch_manager', 'supervisor', 'sales_rep', 'developer')),
   branch_name TEXT NOT NULL,
   supervisor_id TEXT REFERENCES public.users(id),
   phone TEXT,
-  commission_rate NUMERIC DEFAULT 2.5,
   is_active BOOLEAN DEFAULT true,
   approval_status TEXT DEFAULT 'active',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())

@@ -268,6 +268,22 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
     return Array.from(set).filter(Boolean);
   }, [products]);
 
+  // Active branch context for stock resolution: specific user's branch for reps/supervisors, or global filter for admin
+  const currentActiveBranch = useMemo(() => {
+    if (currentUser?.role === 'sales_rep' || currentUser?.role === 'supervisor' || currentUser?.role === 'branch_manager') {
+      return currentUser.branchName || 'فرع أكتوبر (الفرع الرئيسي والمخزن المركزي)';
+    }
+    return selectedBranchFilter !== 'الكل' ? selectedBranchFilter : (currentUser?.branchName || '');
+  }, [currentUser, selectedBranchFilter]);
+
+  // Helper to get effective branch stock for a product for current viewer
+  const getProductBranchStock = (p: Product) => {
+    if (p.branchStocks && currentActiveBranch && p.branchStocks[currentActiveBranch] !== undefined) {
+      return p.branchStocks[currentActiveBranch];
+    }
+    return p.branchStockActual;
+  };
+
   // Stock Counts for Filtering
   const stockCounts = useMemo(() => {
     let outOfStock = 0;
@@ -277,8 +293,11 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
     let inWarehouse = 0;
 
     products.forEach((p) => {
-      const branchCartons = Math.floor(p.branchStockReserved / (p.cartonQuantity || 1));
-      const isOut = p.branchStockReserved <= 0 && p.branchStockActual <= 0;
+      const branchStock = p.branchStocks && currentActiveBranch && p.branchStocks[currentActiveBranch] !== undefined
+        ? p.branchStocks[currentActiveBranch]
+        : p.branchStockActual;
+      const branchCartons = branchStock;
+      const isOut = branchStock <= 0 && p.mainWarehouseActual <= 0;
       if (isOut) {
         outOfStock++;
       } else if (branchCartons > 0 && branchCartons <= 5) {
@@ -287,8 +306,8 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
         highStock++;
       }
 
-      if (p.branchStockReserved > 0 || p.branchStockActual > 0) inBranch++;
-      if (p.mainWarehouseReserved > 0 || p.mainWarehouseActual > 0) inWarehouse++;
+      if (branchStock > 0) inBranch++;
+      if (p.mainWarehouseActual > 0) inWarehouse++;
     });
 
     return {
@@ -299,7 +318,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
       inBranch,
       inWarehouse,
     };
-  }, [products]);
+  }, [products, currentActiveBranch]);
 
   // Filtered & Sorted Products
   const filteredProducts = useMemo(() => {
@@ -324,38 +343,37 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
         }
       }
 
-      // Official 22 Departments Filter
+      // Official Brand / Item Group Filter (أقسام الشركة الرئيسية)
       if (selectedOfficialDept !== 'الكل') {
         const target = selectedOfficialDept.toLowerCase().trim();
-        const pDept = (p.department || '').toLowerCase().trim();
+        const pDept = (p.itemGroup || p.department || '').toLowerCase().trim();
         const pCat = (p.category || '').toLowerCase().trim();
-        const pName = (p.name || '').toLowerCase().trim();
-        const pCode = (p.code || '').toLowerCase().trim();
 
         const match =
           pDept === target ||
           pCat === target ||
           pDept.includes(target) ||
           pCat.includes(target) ||
-          pName.includes(target) ||
-          pCode.startsWith(selectedOfficialDept.slice(0, 3).toLowerCase());
+          (target.length >= 3 && pDept.startsWith(target.slice(0, 3))) ||
+          (target.length >= 3 && pCat.startsWith(target.slice(0, 3)));
 
         if (!match) return false;
       }
 
-      // Sub-category / Classification (Power BI Slicer Filter)
+      // Sub-category / Family Name Filter (Power BI Slicer Filter)
       if (selectedSubCategory !== 'الكل') {
         const targetSub = selectedSubCategory.toLowerCase().trim();
+        const pFamily = (p.familyName || '').toLowerCase().trim();
         const pClass = (p.classification || '').toLowerCase().trim();
         const pCat = (p.category || '').toLowerCase().trim();
-        const pName = (p.name || '').toLowerCase().trim();
 
+        // Exact match with familyName, classification, or category (strictly matching slicer cards)
         const match =
+          pFamily === targetSub ||
           pClass === targetSub ||
-          pCat === targetSub ||
-          pClass.includes(targetSub) ||
-          pCat.includes(targetSub) ||
-          (pName.includes(targetSub) && targetSub.length > 3);
+          (pCat === targetSub && !pFamily && !pClass) ||
+          (pFamily && pFamily === targetSub) ||
+          (pClass && pClass === targetSub);
 
         if (!match) return false;
       }
@@ -1158,8 +1176,11 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {displayedProducts.map((product) => {
-                  const branchCartons = product.branchStockActual;
-                  const branchReservedCartons = Math.max(0, product.branchStockReserved);
+                  const activeBranch = selectedBranchFilter !== 'الكل' ? selectedBranchFilter : (currentUser?.branchName || '');
+                  const branchCartons = (product.branchStocks && activeBranch && product.branchStocks[activeBranch] !== undefined)
+                    ? product.branchStocks[activeBranch]
+                    : product.branchStockActual;
+                  const branchReservedCartons = Math.max(0, branchCartons - 5);
                   const mainWhCartons = product.mainWarehouseActual;
 
                   return (
