@@ -55,7 +55,8 @@ export const InventoryStockView: React.FC = () => {
     approveOrder,
     forwardOrderToManager,
     rejectOrder,
-    selectedBranchFilter
+    selectedBranchFilter,
+    setSelectedBranchFilter
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'matrix' | 'pending_approvals' | 'audit_logs'>('matrix');
@@ -1561,7 +1562,7 @@ export const InventoryStockView: React.FC = () => {
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-black text-sm text-rose-700 flex items-center gap-2">
                 <XCircle className="w-4 h-4" />
-                <span>رفض الطلبية وإرجاع الرصيد المحجوز للمخزن</span>
+                <span>رفض الطلبية وإرجاع الرصيد المحجوز للمخ��ن</span>
               </h3>
               <button onClick={() => setRejectModalInvoiceId(null)}>
                 <X className="w-4 h-4 text-slate-400 hover:text-slate-700" />
