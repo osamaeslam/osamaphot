@@ -797,18 +797,119 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
+  // Auto-link customer rep names to actual user accounts
+  const linkCustomersToUsers = (list: Customer[], userList: User[]): Customer[] => {
+    if (!userList || userList.length === 0) return list;
+
+    const normalize = (s: string) =>
+      (s || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .replace(/ؤ/g, 'و')
+        .replace(/ئ/g, 'ي')
+        .replace(/ء/g, '')
+        .replace(/[\s_\-ـ.]/g, '')
+        .replace(/[ًٌٍَُِّْ]/g, '');
+
+    const getTokens = (s: string) => {
+      const norm = (s || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .replace(/ؤ/g, 'و')
+        .replace(/ئ/g, 'ي')
+        .replace(/ء/g, '')
+        .replace(/[ًٌٍَُِّْ]/g, '')
+        .replace(/[\-_ـ.]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!norm) return [];
+      return norm.split(' ').filter((t) => t.length >= 2);
+    };
+
+    const reps = userList.filter((u) => u.role === 'sales_rep' || u.role === 'supervisor' || u.role === 'branch_manager');
+
+    const repTokens = reps.map((u) => ({
+      user: u,
+      nameTokens: getTokens(u.name),
+      usernameNorm: normalize(u.username),
+      phoneNorm: u.phone ? normalize(u.phone) : '',
+    }));
+
+    return list.map((c) => {
+      const rawRep = (c.salesRepName || c.repName || '').trim();
+      if (!rawRep || rawRep === 'مندوب المبيعات' || rawRep === 'المندوب') return c;
+
+      const normRep = normalize(rawRep);
+      const repTokenSet = new Set(getTokens(rawRep));
+
+      // 1. Exact normalized match on name
+      let matched = reps.find((u) => normalize(u.name) === normRep);
+      // 2. Exact match on username
+      if (!matched) matched = reps.find((u) => normalize(u.username) === normRep);
+      // 3. Exact phone match
+      if (!matched) matched = reps.find((u) => u.phone && normalize(u.phone) === normRep);
+
+      // 4. Token overlap: all customer tokens appear in user name tokens (or vice versa)
+      if (!matched) {
+        let bestScore = 0;
+        let bestUser: User | undefined;
+        for (const r of repTokens) {
+          if (r.nameTokens.length === 0 || repTokenSet.size === 0) continue;
+          const userTokenSet = new Set(r.nameTokens);
+          let overlap = 0;
+          repTokenSet.forEach((t) => { if (userTokenSet.has(t)) overlap++; });
+          const score = overlap / Math.max(repTokenSet.size, userTokenSet.size);
+          if (score > bestScore) { bestScore = score; bestUser = r.user; }
+        }
+        if (bestUser && bestScore >= 0.5) matched = bestUser;
+      }
+
+      // 5. Contains match (one name inside the other) — careful with short names
+      if (!matched && normRep.length >= 4) {
+        matched = reps.find((u) => {
+          const un = normalize(u.name);
+          return un.length >= 4 && (un.includes(normRep) || normRep.includes(un));
+        });
+      }
+
+      if (matched) {
+        return { ...c, repName: matched.name, repId: matched.id, salesRepName: matched.name };
+      }
+      return c;
+    });
+  };
+
   const importCustomersList = (newCustomers: Customer[], mode: 'merge' | 'replace' = 'merge') => {
     const sanitizedIncoming = sanitizeCustomers(newCustomers);
+    const linked = linkCustomersToUsers(sanitizedIncoming, users);
     let finalCustomers: Customer[] = [];
     if (mode === 'replace') {
-      finalCustomers = sanitizedIncoming;
+      finalCustomers = linked;
       setCustomers(finalCustomers);
     } else {
-      finalCustomers = sanitizeCustomers([...customers, ...sanitizedIncoming]);
+      finalCustomers = sanitizeCustomers([...customers, ...linked]);
       setCustomers(finalCustomers);
     }
     saveCustomersToSupabase(finalCustomers).catch((e) => console.warn('Supabase customer bulk save error:', e));
   };
+
+  // Auto-link customers to users when user list changes (e.g. after Supabase fetch)
+  useEffect(() => {
+    if (users.length === 0 || customers.length === 0) return;
+    setCustomers((prev) => {
+      const linked = linkCustomersToUsers(prev, users);
+      const changed = linked.some((c, i) => c.repId !== prev[i]?.repId);
+      if (!changed) return prev;
+      saveCustomersToSupabase(linked).catch(() => {});
+      return linked;
+    });
+  }, [users]);
 
   // Sync high-capacity data directly to IndexedDB (preventing LocalStorage quota overflow)
   useEffect(() => {
