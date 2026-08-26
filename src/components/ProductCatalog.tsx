@@ -91,6 +91,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
     'default' | 'branch_stock_desc' | 'branch_stock_asc' | 'october_stock_desc' | 'october_stock_asc' | 'total_stock_desc' | 'priority' | 'price_asc' | 'price_desc' | 'name_asc'
   >('default');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
 
   // Modals & UI States
   const [selectedProductForModal, setSelectedProductForModal] = useState<Product | null>(null);
@@ -660,7 +661,27 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
 
       {/* Unified, Clean Search & Quick Filters Bar - Simplified for Mobile with high touch targets */}
       <div className="bg-slate-900 text-white rounded-2xl sm:rounded-3xl p-2.5 sm:p-5 shadow-lg border border-slate-800 space-y-2.5 sm:space-y-3">
-        
+        <div className="flex items-center justify-between gap-2 md:hidden">
+          <div className="flex items-center gap-2 min-w-0">
+            <SlidersHorizontal className="w-4 h-4 text-amber-400 shrink-0" />
+            <span className="text-sm font-black truncate">البحث والتصفية</span>
+            {(selectedOfficialDept !== 'الكل' || selectedSubCategory !== 'الكل' || stockAvailabilityFilter !== 'all') && (
+              <span className="rounded-full bg-amber-400 px-2 py-0.5 text-[10px] font-black text-slate-950">مفعّل</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsFilterPanelOpen((open) => !open)}
+            className="flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-amber-400/40 bg-amber-400 px-3 text-xs font-black text-slate-950 transition active:scale-95"
+            aria-expanded={isFilterPanelOpen}
+            aria-controls="catalog-filters"
+          >
+            {isFilterPanelOpen ? <X className="h-4 w-4" /> : <Filter className="h-4 w-4" />}
+            {isFilterPanelOpen ? 'إخفاء' : 'الاختيارات'}
+          </button>
+        </div>
+
+        <div id="catalog-filters" className={`${isFilterPanelOpen ? 'block' : 'hidden'} md:block`}>
         {/* Main Search Row */}
         <div className="flex flex-col md:flex-row items-stretch gap-2">
           {/* Main search input */}
@@ -887,6 +908,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
             </button>
           </div>
         )}
+        </div>
       </div>
 
       {/* 21 Official Departments & Power BI Subcategories / Classifications Slicer Panel */}
@@ -899,6 +921,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
         }}
         selectedClassification={selectedSubCategory}
         onSelectClassification={(classification) => setSelectedSubCategory(classification)}
+        className={`${isFilterPanelOpen ? 'block' : 'hidden'} md:block`}
       />
 
       {/* Fresh Upload / Setup Box (Visible when triggered or when products are empty) */}
