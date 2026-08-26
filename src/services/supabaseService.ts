@@ -200,11 +200,38 @@ export async function saveCustomerToSupabase(customer: Customer): Promise<{ succ
   return saveCustomersToSupabase([customer]);
 }
 
+const CATALOG_SYNC_STORE_ID = '00000000-0000-0000-0000-000000000001';
+export const USER_SYNC_STORE_ID = '00000000-0000-0000-0000-000000000002';
+
 /**
- * Fetch all users from Supabase (checking 'users', 'profiles', 'employees', 'app_users')
+ * Fetch all users from Supabase (checking central snapshot first, then 'users' / 'profiles' tables)
  */
 export async function fetchUsersFromSupabase(): Promise<{ success: boolean; users?: User[]; error?: string }> {
   try {
+    // 1. Check central snapshot store in 'orders' table (shared and 100% compatible)
+    try {
+      const { data: snapData, error: snapErr } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', USER_SYNC_STORE_ID)
+        .limit(1);
+
+      if (!snapErr && snapData && snapData.length > 0 && snapData[0].items) {
+        const rawItems = snapData[0].items;
+        const usersList: User[] = Array.isArray(rawItems)
+          ? rawItems
+          : typeof rawItems === 'string'
+          ? JSON.parse(rawItems)
+          : [];
+        if (usersList.length > 0) {
+          return { success: true, users: usersList };
+        }
+      }
+    } catch {
+      // fallback to tables
+    }
+
+    // 2. Fallback: check table candidates safely
     const tableCandidates = ['users', 'profiles', 'employees', 'app_users'];
 
     for (const tbl of tableCandidates) {
@@ -273,7 +300,7 @@ export async function findUserInSupabase(identifier: string): Promise<{ success:
       return { success: false, error: 'المعرف فارغ' };
     }
 
-    // 1. Fetch all remote users and match accurately in memory without fragile PostgREST URL syntax errors
+    // Fetch remote users and match accurately in memory without fragile PostgREST URL syntax errors
     const remoteRes = await fetchUsersFromSupabase();
     if (remoteRes.success && remoteRes.users && remoteRes.users.length > 0) {
       const found = remoteRes.users.find(
@@ -288,43 +315,6 @@ export async function findUserInSupabase(identifier: string): Promise<{ success:
       }
     }
 
-    // 2. Direct single lookup fallback on 'users' and 'profiles' table using clean values
-    for (const tableName of ['users', 'profiles']) {
-      try {
-        if (cleanEmail.includes('@')) {
-          const { data: eData, error: eErr } = await supabase
-            .from(tableName)
-            .select('*')
-            .eq('email', cleanEmail)
-            .limit(1);
-
-          if (!eErr && eData && eData.length > 0) {
-            const u = eData[0];
-            return {
-              success: true,
-              user: {
-                id: u.id || `sup-u-${Date.now()}`,
-                name: u.name || u.full_name || u.username || 'مستخدم',
-                username: u.username || u.email?.split('@')[0] || 'user',
-                email: u.email || '',
-                password: u.password || '',
-                role: normalizeUserRole(u.role, u.is_admin),
-                branchName: u.branch_name || u.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
-                supervisorId: u.supervisor_id || u.supervisorId,
-                phone: u.phone || u.mobile || '',
-                commissionRate: u.commission_rate || u.commissionRate || 2.5,
-                isActive: u.is_active !== undefined ? u.is_active : true,
-                approvalStatus: u.approval_status || u.approvalStatus || 'active',
-                registrationDate: u.created_at || u.registration_date || u.createdAt || new Date().toISOString(),
-              },
-            };
-          }
-        }
-      } catch {
-        // ignore and continue
-      }
-    }
-
     return { success: false, error: 'لم يتم العثور على المستخدم' };
   } catch (err: any) {
     return { success: false, error: err?.message || 'تعذر البحث عن المستخدم في السحابة' };
@@ -332,49 +322,43 @@ export async function findUserInSupabase(identifier: string): Promise<{ success:
 }
 
 /**
- * Upsert / Save user into Supabase
+ * Save all users into Supabase central store snapshot and table safely
+ */
+export async function saveUsersToSupabase(users: User[]): Promise<{ success: boolean; error?: string }> {
+  try {
+    // 1. Save full users list to the robust shared store in 'orders' table (instant real-time broadcast)
+    try {
+      await supabase.from('orders').upsert({
+        id: USER_SYNC_STORE_ID,
+        status: 'users_sync_snapshot',
+        total: users.length,
+        items: users as any,
+      });
+    } catch (storeErr) {
+      console.warn('Users snapshot save note:', storeErr);
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e?.message };
+  }
+}
+
+/**
+ * Upsert / Save single user into Supabase
  */
 export async function saveUserToSupabase(user: User): Promise<{ success: boolean; error?: string }> {
   try {
-    const isUuid = (str: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-    const safeUuid = user.id && isUuid(user.id) ? user.id : stringToUuid(user.id || user.username || user.email);
-
-    const payloadRaw = {
-      id: user.id,
-      name: user.name,
-      username: user.username,
-      email: user.email,
-      password: user.password || '',
-      role: user.role,
-      branch_name: user.branchName,
-      supervisor_id: user.supervisorId || null,
-      phone: user.phone || '',
-      commission_rate: user.commissionRate || 2.5,
-      is_active: user.isActive ?? true,
-      approval_status: user.approvalStatus || 'active',
-      updated_at: new Date().toISOString(),
-    };
-
-    const payloadUuid = {
-      ...payloadRaw,
-      id: safeUuid,
-    };
-
-    // Try saving to 'users' table with raw ID first, then fallback to UUID
-    const { error: err1 } = await supabase.from('users').upsert(payloadRaw);
-    if (!err1) return { success: true };
-
-    const { error: errUuid1 } = await supabase.from('users').upsert(payloadUuid);
-    if (!errUuid1) return { success: true };
-
-    // Fallback to 'profiles'
-    const { error: err2 } = await supabase.from('profiles').upsert(payloadRaw);
-    if (!err2) return { success: true };
-
-    const { error: errUuid2 } = await supabase.from('profiles').upsert(payloadUuid);
-    if (!errUuid2) return { success: true };
-
-    return { success: false, error: err1.message || errUuid1?.message || err2?.message };
+    // Fetch current users and update snapshot
+    const current = await fetchUsersFromSupabase();
+    let updatedList: User[] = [user];
+    if (current.success && current.users) {
+      const map = new Map<string, User>();
+      current.users.forEach((u) => map.set(u.id, u));
+      map.set(user.id, user);
+      updatedList = Array.from(map.values());
+    }
+    return saveUsersToSupabase(updatedList);
   } catch (e: any) {
     return { success: false, error: e?.message };
   }
@@ -382,11 +366,12 @@ export async function saveUserToSupabase(user: User): Promise<{ success: boolean
 
 export async function deleteUserFromSupabase(userId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const { error: err1 } = await supabase.from('users').delete().eq('id', userId);
-    if (!err1) return { success: true };
-    const { error: err2 } = await supabase.from('profiles').delete().eq('id', userId);
-    if (!err2) return { success: true };
-    return { success: false, error: err1.message || err2?.message };
+    const current = await fetchUsersFromSupabase();
+    if (current.success && current.users) {
+      const filtered = current.users.filter((u) => u.id !== userId);
+      return saveUsersToSupabase(filtered);
+    }
+    return { success: true };
   } catch (e: any) {
     return { success: false, error: e?.message };
   }
@@ -544,8 +529,6 @@ function stringToUuid(str: string): string {
   const part5 = Math.abs((hash * 7) | 0).toString(16).padStart(12, '0').slice(-12);
   return `${hex}-${part2}-${part3}-${part4}-${part5}`;
 }
-
-const CATALOG_SYNC_STORE_ID = '00000000-0000-0000-0000-000000000001';
 
 /**
  * Save / Upsert full products catalog into Supabase

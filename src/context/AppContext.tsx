@@ -22,10 +22,12 @@ import {
   saveCustomersToSupabase,
   saveInvoiceToSupabase,
   saveProductsToSupabase,
+  saveUsersToSupabase,
   saveUserToSupabase,
   supabase,
   SupabaseSyncStatus,
   testSupabaseConnection,
+  USER_SYNC_STORE_ID,
 } from '../services/supabaseService';
 import {
   AccountingSyncLog,
@@ -562,9 +564,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // 3. Push local users, invoices, and products to Supabase if requested
       if (direction === 'push' || direction === 'both') {
-        for (const user of users) {
-          await saveUserToSupabase(user);
-          pushedUsersCount++;
+        if (users.length > 0) {
+          await saveUsersToSupabase(users);
+          pushedUsersCount = users.length;
         }
         for (const inv of invoices) {
           await saveInvoiceToSupabase(inv);
@@ -727,6 +729,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 : [];
               if (remoteProducts.length > 0) {
                 setProducts(sanitizeProducts(remoteProducts));
+              }
+            } else if (raw && raw.id === '00000000-0000-0000-0000-000000000002' && raw.items) {
+              const remoteUsers: User[] = Array.isArray(raw.items)
+                ? raw.items
+                : typeof raw.items === 'string'
+                ? JSON.parse(raw.items)
+                : [];
+              if (remoteUsers.length > 0) {
+                setUsers((prev) => {
+                  const map = new Map<string, User>();
+                  prev.forEach((u) => map.set(u.id, u));
+                  remoteUsers.forEach((u) => map.set(u.id, u));
+                  return Array.from(map.values());
+                });
               }
             }
           }
