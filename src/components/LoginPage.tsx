@@ -75,7 +75,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onSuccess }) => {
             <span>شركة دريم للتجارة والتوزيع</span>
           </h1>
           <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-sm mx-auto">
-            منظومة إدارة المبيعات والمخازن والربط السحابي بالفواتير الإلكترونية
+            منظومة إدارة المبيعات والمخازن والفواتير الإلكترونية
           </p>
         </div>
 
@@ -91,10 +91,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onSuccess }) => {
                 <p className="text-[11px] text-slate-400">للمطورين، المديرين، المشرفين، والمناديب</p>
               </div>
             </div>
-            <span className="text-[10px] sm:text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              قاعدة بيانات سحابية
-            </span>
           </div>
 
           <form onSubmit={handleLoginSubmit} className="space-y-4">
@@ -177,13 +173,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onSuccess }) => {
             </div>
           </form>
 
-          {/* Footer Security Badge */}
-          <div className="pt-3 mt-4 border-t border-slate-800/60 text-center">
-            <p className="text-[11px] text-slate-400 flex items-center justify-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>مزامنة سحابية فورية ومحمية ومشفرة عبر Supabase</span>
-            </p>
-          </div>
         </div>
       </div>
     </div>
