@@ -525,32 +525,73 @@ function onEdit(e) {
                   onClick={() => {
                     const scriptCode = `/**
  * سكريبت قراءة جميع الصور من المجلد الرئيسي والمجلدات الفرعية
+ * يدعم آلاف الصور باستخدام Pagination لتجنب انتهاء المهلة (6 دقائق)
  * وربط اسم/كود الصورة برابط مباشر خفيف ومناسب للكتالوج
+ *
+ * طريقة الاستخدام:
+ * 1. ضع MAIN_FOLDER_ID
+ * 2. شغل syncDriveFolderWithSheet — سيبدأ من حيث توقف تلقائياً
+ * 3. أعد تشغيله حتى ترى رسالة "اكتمل المسح"
  */
 function syncDriveFolderWithSheet() {
-  // 🔴 ضع هنا الـ ID الخاص بالمجلد الرئيسي فقط (الموجود في رابط الفولدر على درايف)
+  // 🔴 ضع هنا الـ ID الخاص بالمجلد الرئيسي فقط
   var MAIN_FOLDER_ID = "ضع_ID_المجلد_الرئيسي_هنا";
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getActiveSheet();
-  
+  var sheet = ss.getSheetByName("Sheet_Images") || ss.insertSheet("Sheet_Images");
+
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(["كود / اسم الصنف", "مسار المجلد الفرعي", "رابط الصورة المباشر", "File ID"]);
     sheet.getRange("1:1").setFontWeight("bold").setBackground("#0284c7").setFontColor("#ffffff");
   }
 
-  var rootFolder = DriveApp.getFolderById(MAIN_FOLDER_ID);
-  
-  try {
-    rootFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  } catch(e) {}
+  // قراءة علامة التوقف من الخلية E1 (تستخدم لاستئناف المسح)
+  var props = PropertiesService.getScriptProperties();
+  var resumeFolderId = props.getProperty("RESUME_FOLDER_ID");
+  var resumePath = props.getProperty("RESUME_PATH") || "";
+  var totalProcessed = parseInt(props.getProperty("TOTAL_PROCESSED") || "0", 10);
 
-  Logger.log("بدء المسح الشامل للمجلدات...");
-  processFolderRecursive(rootFolder, sheet, "");
-  SpreadsheetApp.getUi().alert("✅ تم جلب جميع الصور من كافة المجلدات الفرعية بنجاح!");
+  var startFolder = resumeFolderId
+    ? DriveApp.getFolderById(resumeFolderId)
+    : DriveApp.getFolderById(MAIN_FOLDER_ID);
+
+  if (!resumeFolderId) {
+    try {
+      startFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (e) {}
+  }
+
+  var startTime = new Date().getTime();
+  var TIME_LIMIT_MS = 5 * 60 * 1000; // 5 دقائق (هامش أمان قبل انتهاء المهلة)
+
+  Logger.log("بدء/استئناف المسح الشامل... (تم معالجة " + totalProcessed + " صورة حتى الآن)");
+  var result = processFolderRecursive(startFolder, sheet, resumePath, startTime, TIME_LIMIT_MS, { count: 0 });
+
+  totalProcessed += result.count;
+  props.setProperty("TOTAL_PROCESSED", String(totalProcessed));
+
+  if (result.timedOut) {
+    // حفظ علامة التوقف لاستئناف لاحقاً
+    if (result.nextFolderId) {
+      props.setProperty("RESUME_FOLDER_ID", result.nextFolderId);
+      props.setProperty("RESUME_PATH", result.nextPath || "");
+    }
+    SpreadsheetApp.getUi().alert(
+      "⏱️ تمت معالجة " + totalProcessed + " صورة.\n" +
+      "اقترب الوقت من الانتهاء. أعد تشغيل السكريبت لمتابعة المسح من حيث توقف."
+    );
+  } else {
+    // اكتمل المسح — تنظيف علامات التوقف
+    props.deleteProperty("RESUME_FOLDER_ID");
+    props.deleteProperty("RESUME_PATH");
+    props.deleteProperty("TOTAL_PROCESSED");
+    SpreadsheetApp.getUi().alert(
+      "✅ اكتمل المسح! تم جلب " + totalProcessed + " صورة من كافة المجلدات الفرعية بنجاح!"
+    );
+  }
 }
 
-function processFolderRecursive(folder, sheet, currentPath) {
+function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimitMs, state) {
   var rows = [];
   var folderName = folder.getName();
   var fullPath = currentPath ? (currentPath + " > " + folderName) : folderName;
@@ -559,7 +600,7 @@ function processFolderRecursive(folder, sheet, currentPath) {
   while (files.hasNext()) {
     var file = files.next();
     var mimeType = file.getMimeType();
-    
+
     if (mimeType.indexOf("image") !== -1 || file.getName().match(/\\.(jpg|jpeg|png|webp)$/i)) {
       var itemCodeOrName = file.getName().replace(/\\.[^/.]+$/, "").trim();
       var catalogImageUrl = "https://lh3.googleusercontent.com/d/" + file.getId() + "=w800";
@@ -570,6 +611,7 @@ function processFolderRecursive(folder, sheet, currentPath) {
         catalogImageUrl,
         file.getId()
       ]);
+      state.count++;
     }
   }
 
@@ -578,10 +620,34 @@ function processFolderRecursive(folder, sheet, currentPath) {
   }
 
   var subFolders = folder.getFolders();
+  var subFolderList = [];
   while (subFolders.hasNext()) {
-    var sub = subFolders.next();
-    processFolderRecursive(sub, sheet, fullPath);
+    subFolderList.push(subFolders.next());
   }
+
+  for (var i = 0; i < subFolderList.length; i++) {
+    // فحص الوقت قبل كل مجلد فرعي
+    if (new Date().getTime() - startTime > timeLimitMs) {
+      return {
+        timedOut: true,
+        count: state.count,
+        nextFolderId: subFolderList[i].getId(),
+        nextPath: fullPath
+      };
+    }
+
+    // التأكد من أن المجلد الفرعي متاح للجميع بالرابط
+    try {
+      subFolderList[i].setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (e) {}
+
+    var subResult = processFolderRecursive(subFolderList[i], sheet, fullPath, startTime, timeLimitMs, state);
+    if (subResult.timedOut) {
+      return subResult;
+    }
+  }
+
+  return { timedOut: false, count: state.count };
 }`;
                     navigator.clipboard.writeText(scriptCode);
                     setCopiedScript(true);
@@ -730,6 +796,8 @@ function processFolderRecursive(folder, sheet, currentPath) {
                   <option value={250}>250 صنف</option>
                   <option value={500}>500 صنف</option>
                   <option value={1000}>1000 صنف</option>
+                  <option value={2000}>2000 صنف</option>
+                  <option value={5000}>5000 صنف</option>
                   <option value="all">عرض الكل ({previewProducts.length} صنف)</option>
                 </select>
               </div>
