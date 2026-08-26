@@ -1093,21 +1093,18 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                 {/* Email + Phone */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">البريد الإلكتروني (اختياري للدخول)</label>
+                    <label className="block font-bold text-slate-700 mb-1">البريد الإلكتروني</label>
                     <input
                       type="email"
                       value={formData.email || ''}
                       onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                      placeholder="ahmed@dream-dist.com"
+                      placeholder="user@example.com"
                       className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-slate-800 text-xs"
                     />
-                    <p className="text-[10px] text-slate-400 mt-1">
-                      يستطيع الموظف تسجيل الدخول باسم المستخدم أو البريد أو الهاتف.
-                    </p>
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">رقم الهاتف (للتواصل والواتساب والدخول)</label>
+                    <label className="block font-bold text-slate-700 mb-1">رقم الهاتف / الواتساب</label>
                     <input
                       type="tel"
                       value={formData.phone || ''}
