@@ -250,15 +250,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!saved) return INITIAL_BRANCHES;
     try {
       const parsed: Branch[] = JSON.parse(saved);
-      const map = new Map<string, Branch>();
-      INITIAL_BRANCHES.forEach((b) => map.set(b.name, b));
-      parsed.forEach((b) => {
-        const norm = normalizeBranchName(b.name);
-        if (!map.has(norm)) {
-          map.set(norm, { ...b, name: norm });
-        }
-      });
-      return Array.from(map.values());
+      // Keep the canonical seven operating branches plus October's central warehouse.
+      // Legacy/custom branch labels are normalized onto this fixed list instead of
+      // becoming extra branches in totals and selectors.
+      const canonicalNames = new Set(INITIAL_BRANCHES.map((branch) => branch.name));
+      const savedByName = new Map(parsed.map((branch) => [normalizeBranchName(branch.name), branch]));
+      return INITIAL_BRANCHES.map((branch) => ({
+        ...branch,
+        ...(savedByName.get(branch.name) || {}),
+        name: branch.name,
+        isMainWarehouse: branch.isMainWarehouse === true,
+      })).filter((branch) => canonicalNames.has(branch.name));
     } catch {
       return INITIAL_BRANCHES;
     }
@@ -1023,7 +1025,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (found.password && found.password.trim().length > 0) {
       const dbPass = found.password.trim();
       if (dbPass !== cleanPass) {
-        return { success: false, message: 'كلمة المرور غير صحيحة. يرجى التأكد من كتابة كل��ة المرور بدقة.' };
+        return { success: false, message: 'كلمة المرور غير صحي��ة. يرجى التأكد من كتابة كل��ة المرور بدقة.' };
       }
     } else if (cleanPass) {
       // First-time setup: user sets their password
@@ -1591,7 +1593,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     message?: string;
   } => {
     if (cart.length === 0) {
-      return { success: false, message: 'سلة الطلبية فارغة! يرجى إضافة أصناف أولاً.' };
+      return { success: false, message: 'سلة الطلبية ف��رغة! يرجى إضافة أصناف أولاً.' };
     }
 
     // Submitting a request does not check, reserve, transfer, or deduct stock.

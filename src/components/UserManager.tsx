@@ -548,8 +548,8 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                   onChange={(e) => setSelectedBranchFilter(e.target.value)}
                   className="bg-transparent font-black text-slate-800 focus:outline-none cursor-pointer"
                 >
-                  <option value="الكل">جميع الفروع ({branches.length})</option>
-                  {branches.map((b) => (
+                  <option value="الكل">الفروع التشغيلية (7)</option>
+                  {branches.filter((b) => !b.isMainWarehouse).map((b) => (
                     <option key={b.id} value={b.name}>{b.name}</option>
                   ))}
                 </select>
@@ -1013,7 +1013,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                       disabled={!isSuperAdminOrDev}
                       className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs cursor-pointer disabled:opacity-70 disabled:bg-slate-100"
                     >
-                      {branches.map((b) => (
+                      {branches.filter((b) => !b.isMainWarehouse).map((b) => (
                         <option key={b.id} value={b.name}>
                           {b.name}
                         </option>
@@ -1116,7 +1116,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                   onChange={(e) => setApprovalBranchName(e.target.value)}
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold"
                 >
-                  {branches.map((b) => (
+                  {branches.filter((b) => !b.isMainWarehouse).map((b) => (
                     <option key={b.id} value={b.name}>{b.name}</option>
                   ))}
                 </select>
