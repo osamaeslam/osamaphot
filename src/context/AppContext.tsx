@@ -11,6 +11,14 @@ import { DEFAULT_CLOUDINARY_CONFIG } from '../services/cloudinaryService';
 import { clearCachedImages } from '../services/imageCacheService';
 import { idbClear, idbDelete, idbGet, idbSet, safeLocalStorageSet } from '../services/storageService';
 import {
+  doesCustomerBelongToBranch,
+  doesCustomerBelongToRep,
+  doesCustomerBelongToSupervisor,
+  isArabicNameMatch,
+  isBranchMatch,
+  normalizeArabicText,
+} from '../services/arabicMatchingService';
+import {
   deleteUserFromSupabase,
   fetchCustomersFromSupabase,
   fetchInvoicesFromSupabase,
@@ -805,89 +813,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  // Auto-link customer rep names to actual user accounts
+  // Auto-link customer rep names to actual user accounts with Arabic matching & branch tolerance
   const linkCustomersToUsers = (list: Customer[], userList: User[]): Customer[] => {
     if (!userList || userList.length === 0) return list;
 
-    const normalize = (s: string) =>
-      (s || '')
-        .trim()
-        .toLowerCase()
-        .replace(/[أإآ]/g, 'ا')
-        .replace(/ة/g, 'ه')
-        .replace(/ى/g, 'ي')
-        .replace(/ؤ/g, 'و')
-        .replace(/ئ/g, 'ي')
-        .replace(/ء/g, '')
-        .replace(/[\s_\-ـ.]/g, '')
-        .replace(/[ًٌٍَُِّْ]/g, '');
-
-    const getTokens = (s: string) => {
-      const norm = (s || '')
-        .trim()
-        .toLowerCase()
-        .replace(/[أإآ]/g, 'ا')
-        .replace(/ة/g, 'ه')
-        .replace(/������/g, 'ي')
-        .replace(/ؤ/g, 'و')
-        .replace(/ئ/g, 'ي')
-        .replace(/ء/g, '')
-        .replace(/[ًٌٍَُِّْ]/g, '')
-        .replace(/[\-_ـ.]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (!norm) return [];
-      return norm.split(' ').filter((t) => t.length >= 2);
-    };
-
     const reps = userList.filter((u) => u.role === 'sales_rep' || u.role === 'supervisor' || u.role === 'branch_manager');
-
-    const repTokens = reps.map((u) => ({
-      user: u,
-      nameTokens: getTokens(u.name),
-      usernameNorm: normalize(u.username),
-      phoneNorm: u.phone ? normalize(u.phone) : '',
-    }));
 
     return list.map((c) => {
       const rawRep = (c.salesRepName || c.repName || '').trim();
       if (!rawRep || rawRep === 'مندوب المبيعات' || rawRep === 'المندوب') return c;
 
-      const normRep = normalize(rawRep);
-      const repTokenSet = new Set(getTokens(rawRep));
-
-      // 1. Exact normalized match on name
-      let matched = reps.find((u) => normalize(u.name) === normRep);
-      // 2. Exact match on username
-      if (!matched) matched = reps.find((u) => normalize(u.username) === normRep);
-      // 3. Exact phone match
-      if (!matched) matched = reps.find((u) => u.phone && normalize(u.phone) === normRep);
-
-      // 4. Token overlap: all customer tokens appear in user name tokens (or vice versa)
-      if (!matched) {
-        let bestScore = 0;
-        let bestUser: User | undefined;
-        for (const r of repTokens) {
-          if (r.nameTokens.length === 0 || repTokenSet.size === 0) continue;
-          const userTokenSet = new Set(r.nameTokens);
-          let overlap = 0;
-          repTokenSet.forEach((t) => { if (userTokenSet.has(t)) overlap++; });
-          const score = overlap / Math.max(repTokenSet.size, userTokenSet.size);
-          if (score > bestScore) { bestScore = score; bestUser = r.user; }
-        }
-        if (bestUser && bestScore >= 0.5) matched = bestUser;
-      }
-
-      // 5. Contains match (one name inside the other) — careful with short names
-      if (!matched && normRep.length >= 4) {
-        matched = reps.find((u) => {
-          const un = normalize(u.name);
-          return un.length >= 4 && (un.includes(normRep) || normRep.includes(un));
-        });
-      }
+      // Match rep using intelligent Arabic matching + branch compatibility
+      const matched = reps.find((u) => doesCustomerBelongToRep(c, u) || isArabicNameMatch(rawRep, u.name) || (u.username && isArabicNameMatch(rawRep, u.username)));
 
       if (matched) {
-        return { ...c, repName: matched.name, repId: matched.id, salesRepName: matched.name };
+        return {
+          ...c,
+          repName: matched.name,
+          repId: matched.id,
+          salesRepName: matched.name,
+          branchName: c.branchName || matched.branchName,
+        };
       }
       return c;
     });
@@ -1696,19 +1642,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const primaryItems = buildInvoiceItems(primaryCartItems);
     const primaryTotals = calculateTotals(primaryItems);
 
+    // Determine assigned rep, supervisor, and audit trail note
+    let assignedRepId = currentUser ? currentUser.id : 'u-admin-1';
+    let assignedRepName = currentUser ? currentUser.name : 'أسامة إسلام (المطور التقني)';
+    let assignedSupervisorName = userSupervisor;
+    let creatorAuditNote = '';
+
+    if (currentUser?.role === 'supervisor') {
+      assignedSupervisorName = currentUser.name;
+      if (orderData.repName && orderData.repName.trim()) {
+        assignedRepName = orderData.repName.trim();
+        const matchedRep = users.find(
+          (u) =>
+            isArabicNameMatch(u.name, assignedRepName) ||
+            (u.username && isArabicNameMatch(u.username, assignedRepName))
+        );
+        if (matchedRep) {
+          assignedRepId = matchedRep.id;
+          assignedRepName = matchedRep.name;
+        }
+      }
+      creatorAuditNote = `[تم إنشاء الطلبية بواسطة المشرف: ${currentUser.name} للمندوب التابع للعميل: ${assignedRepName}]`;
+    } else if (currentUser?.role === 'branch_manager' || currentUser?.role === 'admin' || currentUser?.role === 'developer') {
+      if (orderData.repName && orderData.repName.trim()) {
+        assignedRepName = orderData.repName.trim();
+        const matchedRep = users.find(
+          (u) =>
+            isArabicNameMatch(u.name, assignedRepName) ||
+            (u.username && isArabicNameMatch(u.username, assignedRepName))
+        );
+        if (matchedRep) {
+          assignedRepId = matchedRep.id;
+          assignedRepName = matchedRep.name;
+          if (matchedRep.supervisorId) {
+            const sUser = users.find((u) => u.id === matchedRep.supervisorId);
+            if (sUser) assignedSupervisorName = sUser.name;
+          }
+        }
+      }
+      if (currentUser?.role === 'branch_manager') {
+        creatorAuditNote = `[تم إنشاء الطلبية بواسطة مدير الفرع: ${currentUser.name} للمندوب: ${assignedRepName}]`;
+      }
+    } else if (currentUser?.role === 'sales_rep') {
+      assignedRepId = currentUser.id;
+      assignedRepName = currentUser.name;
+      assignedSupervisorName = userSupervisor;
+    }
+
+    const orderFinalNotes = [orderData.notes, creatorAuditNote].filter(Boolean).join('\n');
+    const orderBranch = orderData.branchName || currentUser?.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)';
+
     const primaryInvoice: Invoice = {
       id: `inv-${Date.now()}`,
       invoiceNumber: newInvoiceNumber,
       customerName: orderData.customerName || 'عميل تجزئة عام',
+      customerCode: orderData.customerCode || undefined,
       customerPhone: orderData.customerPhone || '',
       customerAddress: orderData.customerAddress || '',
       customerTaxNumber: orderData.customerTaxNumber || '',
       date: formattedDate,
       time: formattedTime,
-      repId: currentUser ? currentUser.id : 'u-admin-1',
-      repName: currentUser ? currentUser.name : 'أسامة إسلام (المطور التقني)',
-      supervisorName: userSupervisor,
-      branchName: currentUser?.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
+      repId: assignedRepId,
+      repName: assignedRepName,
+      supervisorName: assignedSupervisorName,
+      branchName: orderBranch,
       items: primaryItems,
       totalCartons: primaryTotals.totalCartons,
       totalPieces: primaryTotals.totalPieces,
@@ -1720,7 +1717,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       estimatedGrandTotal: primaryTotals.estimatedGrandTotal,
       paymentMethod: orderData.paymentMethod || 'نقدي (كاش)',
       status: initialStatus,
-      notes: orderData.notes || '',
+      notes: orderFinalNotes,
       syncedToAccounting: false,
       hasShortageSplit: shouldSplit,
       shortageInvoiceNumber: shouldSplit ? `${newInvoiceNumber}-NQ` : undefined,
@@ -2416,70 +2413,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Supervisor sees invoices of reps in their branch or assigned directly to them
     if (currentUser.role === 'supervisor') {
-      const myReps = users.filter(u => u.supervisorId === currentUser.id).map(u => u.id);
-      return invoices.filter(
-        i => (i.branchName === currentUser.branchName && (i.repId === currentUser.id || myReps.includes(i.repId) || i.supervisorName === currentUser.name)) ||
-             myReps.includes(i.repId) ||
-             i.supervisorName === currentUser.name
+      const supervisedReps = users.filter(
+        (u) =>
+          u.supervisorId === currentUser.id ||
+          (u.role === 'sales_rep' && isBranchMatch(u.branchName, currentUser.branchName))
       );
+      const repIds = new Set(supervisedReps.map((u) => u.id));
+      repIds.add(currentUser.id);
+
+      return invoices.filter((i) => {
+        if (!isBranchMatch(i.branchName, currentUser.branchName)) return false;
+        if (i.repId && repIds.has(i.repId)) return true;
+        if (i.supervisorName && isArabicNameMatch(i.supervisorName, currentUser.name)) return true;
+        if (i.repName && isArabicNameMatch(i.repName, currentUser.name)) return true;
+        return supervisedReps.some((r) => isArabicNameMatch(i.repName, r.name));
+      });
     }
 
     // Sales Rep: STRICT PRIVACY - ONLY his own invoices
-    return invoices.filter(i => i.repId === currentUser.id || i.repName === currentUser.name);
+    return invoices.filter(
+      (i) =>
+        i.repId === currentUser.id ||
+        isArabicNameMatch(i.repName, currentUser.name) ||
+        (currentUser.username && isArabicNameMatch(i.repName, currentUser.username))
+    );
   };
 
   const getVisibleCustomers = (): Customer[] => {
     if (!currentUser) return [];
     if (currentUser.role === 'admin' || currentUser.role === 'developer') return customers;
 
-    const myBranch = (currentUser.branchName || '').trim().toLowerCase();
-
     if (currentUser.role === 'branch_manager') {
-      return customers.filter((c) => {
-        const cBranch = (c.branchName || '').trim().toLowerCase();
-        return !cBranch || cBranch === myBranch;
-      });
+      return customers.filter((c) => doesCustomerBelongToBranch(c, currentUser.branchName));
     }
 
     if (currentUser.role === 'supervisor') {
-      const myReps = users.filter((u) => u.supervisorId === currentUser.id);
-      const repIds = new Set(myReps.map((u) => u.id));
-      repIds.add(currentUser.id);
-
-      const repNames = new Set(myReps.map((u) => u.name.trim().toLowerCase()));
-      repNames.add(currentUser.name.trim().toLowerCase());
-      if (currentUser.username) repNames.add(currentUser.username.trim().toLowerCase());
-
-      return customers.filter((c) => {
-        const cBranch = (c.branchName || '').trim().toLowerCase();
-        if (cBranch && myBranch && cBranch !== myBranch) return false;
-
-        if (c.repId && repIds.has(c.repId)) return true;
-        const cRep = (c.repName || c.salesRepName || '').trim().toLowerCase();
-        if (!cRep) return false;
-        return repNames.has(cRep) || Array.from(repNames).some((rn) => rn && (cRep.includes(rn) || rn.includes(cRep)));
-      });
+      return customers.filter((c) => doesCustomerBelongToSupervisor(c, currentUser, users));
     }
 
     // Sales Rep: STRICT PRIVACY - ONLY his own customers in his branch
-    const myName = (currentUser.name || '').trim().toLowerCase();
-    const myUsername = (currentUser.username || '').trim().toLowerCase();
-    const myId = currentUser.id;
-
-    return customers.filter((c) => {
-      const cBranch = (c.branchName || '').trim().toLowerCase();
-      if (cBranch && myBranch && cBranch !== myBranch) return false;
-
-      if (c.repId && c.repId === myId) return true;
-      const cRep = (c.repName || c.salesRepName || '').trim().toLowerCase();
-      if (!cRep) return false;
-      return (
-        cRep === myName ||
-        (myUsername && cRep === myUsername) ||
-        (myName.length > 3 && cRep.includes(myName)) ||
-        (cRep.length > 3 && myName.includes(cRep))
-      );
-    });
+    return customers.filter((c) => doesCustomerBelongToRep(c, currentUser));
   };
 
   const getVisibleProducts = (): Product[] => {
