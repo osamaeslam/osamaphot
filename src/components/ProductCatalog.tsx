@@ -59,6 +59,7 @@ import { parseExcelProducts, fetchAndParseGoogleSheet, generateSampleExcelTempla
 import { ItemStatus, OFFICIAL_DEPARTMENTS, Product, SalesPriority } from '../types';
 import { DepartmentCategorySlicer } from './DepartmentCategorySlicer';
 import { getDepartmentMeta } from '../data/departmentMeta';
+import { getBranchStockForProduct } from '../services/arabicMatchingService';
 
 interface ProductCatalogProps {
   onOpenCart?: () => void;
@@ -281,16 +282,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
 
   // Helper to get effective branch stock for a product for current viewer
   const getProductBranchStock = (p: Product) => {
-    if (p.branchStocks && currentActiveBranch && p.branchStocks[currentActiveBranch] !== undefined) {
-      return p.branchStocks[currentActiveBranch];
-    }
-    if (p.branchName && p.branchName === currentActiveBranch) {
-      return p.branchStockActual || 0;
-    }
-    if (!p.branchName) {
-      return p.branchStockActual || 0;
-    }
-    return 0;
+    return getBranchStockForProduct(p, currentActiveBranch);
   };
 
   // Stock Counts for Filtering
@@ -1013,10 +1005,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
           {displayedProducts.map((product, idx) => {
             const isPromo = product.promoPrice && product.promoPrice > 0;
             const priorityConfig = priorityBadges[product.salesPriority];
-            const activeBranch = selectedBranchFilter !== 'الكل' ? selectedBranchFilter : (currentUser?.branchName || '');
-            const dynamicBranchStock = (product.branchStocks && activeBranch && product.branchStocks[activeBranch] !== undefined)
-              ? product.branchStocks[activeBranch]
-              : ((product.branchName && product.branchName === activeBranch) || !product.branchName ? product.branchStockActual : 0);
+            const dynamicBranchStock = getProductBranchStock(product);
             const hasBranchStock = dynamicBranchStock > 0;
             const hasMainWhStock = product.mainWarehouseActual > 0;
             const dynamicBranchReserved = Math.max(0, dynamicBranchStock - 5);
@@ -1317,10 +1306,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {displayedProducts.map((product) => {
-                  const activeBranch = selectedBranchFilter !== 'الكل' ? selectedBranchFilter : (currentUser?.branchName || '');
-                  const branchCartons = (product.branchStocks && activeBranch && product.branchStocks[activeBranch] !== undefined)
-                    ? product.branchStocks[activeBranch]
-                    : ((product.branchName && product.branchName === activeBranch) || !product.branchName ? product.branchStockActual : 0);
+                  const branchCartons = getProductBranchStock(product);
                   const branchReservedCartons = Math.max(0, branchCartons - 5);
                   const mainWhCartons = product.mainWarehouseActual;
 
@@ -1665,29 +1651,39 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
                 </div>
 
                 {/* Stock Details Box */}
-                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
-                  <div className="font-bold text-slate-900 text-xs">مستويات المخزون بالكراتين:</div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="bg-white p-2.5 rounded-xl border border-slate-100">
-                      <div className="text-[10px] text-slate-400">الفرع الحالي:</div>
-                      <div className="font-black text-sm text-emerald-700">
-                        {selectedProductForModal.branchStockActual} كرتونة
-                      </div>
-                      <div className="text-[10px] text-slate-500 font-bold">
-                        متاح للطلب: {Math.max(0, selectedProductForModal.branchStockReserved)} كرتونة
+                {(() => {
+                  const activeBranchLabel = currentActiveBranch || selectedProductForModal.branchName || 'الفرع الحالي';
+                  const branchStock = getBranchStockForProduct(selectedProductForModal, currentActiveBranch);
+                  const branchReserved = Math.max(0, branchStock - 5);
+                  const octoberStock = selectedProductForModal.mainWarehouseActual || 0;
+                  const octoberReserved = Math.max(0, selectedProductForModal.mainWarehouseReserved || 0);
+
+                  return (
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
+                      <div className="font-bold text-slate-900 text-xs">مستويات المخزون بالكراتين ({activeBranchLabel}):</div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-100">
+                          <div className="text-[10px] text-slate-400">رصيد {activeBranchLabel}:</div>
+                          <div className="font-black text-sm text-emerald-700">
+                            {branchStock} كرتونة
+                          </div>
+                          <div className="text-[10px] text-slate-500 font-bold">
+                            متاح للطلب: {branchReserved} كرتونة
+                          </div>
+                        </div>
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-100">
+                          <div className="text-[10px] text-slate-400">المخزن المركزي بأكتوبر:</div>
+                          <div className="font-black text-sm text-amber-800">
+                            {octoberStock} كرتونة
+                          </div>
+                          <div className="text-[10px] text-slate-500 font-bold">
+                            متاح للطلب: {octoberReserved} كرتونة
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <div className="bg-white p-2.5 rounded-xl border border-slate-100">
-                      <div className="text-[10px] text-slate-400">المخزن المركزي بأكتوبر:</div>
-                      <div className="font-black text-sm text-amber-800">
-                        {selectedProductForModal.mainWarehouseActual} كرتونة
-                      </div>
-                      <div className="text-[10px] text-slate-500 font-bold">
-                        متاح للطلب: {Math.max(0, selectedProductForModal.mainWarehouseReserved)} كرتونة
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                  );
+                })()}
 
                 {/* Pricing Box (Carton Price Only) */}
                 <div className="bg-amber-50 p-3.5 rounded-2xl border border-amber-200 space-y-2">

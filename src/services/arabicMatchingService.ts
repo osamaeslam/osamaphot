@@ -1,4 +1,4 @@
-import { Customer, User } from '../types';
+import { Customer, Product, User } from '../types';
 
 /**
  * Universal Arabic Text Normalizer
@@ -54,6 +54,9 @@ export function getArabicTokens(str?: string): string[] {
     'مسوول',
     'السيد',
     'السيده',
+    'محل',
+    'شركة',
+    'شركه',
     'م',
     'أ',
     'ا',
@@ -62,8 +65,6 @@ export function getArabicTokens(str?: string): string[] {
     'مهندس',
     'حساب',
     'توزيع',
-    'شركة',
-    'شركه',
   ]);
 
   return norm
@@ -75,7 +76,7 @@ export function getArabicTokens(str?: string): string[] {
 /**
  * Intelligent Arabic Name Matcher
  * Handles exact matches, token overlap, prefix/suffix names (e.g. "حسن محمد" vs "حسن محمد أحمد"),
- * and fuzzy Arabic variations.
+ * and fuzzy Arabic variations, ensuring the primary name token sequence aligns.
  */
 export function isArabicNameMatch(nameA?: string, nameB?: string): boolean {
   if (!nameA || !nameB) return false;
@@ -92,30 +93,31 @@ export function isArabicNameMatch(nameA?: string, nameB?: string): boolean {
   const joinedB = tokensB.join(' ');
   if (joinedA === joinedB) return true;
 
-  // If one full string is contained in the other
+  // If one full string starts with the other
   if (joinedA.length >= 4 && joinedB.length >= 4) {
-    if (joinedA.includes(joinedB) || joinedB.includes(joinedA)) {
+    if (joinedA.startsWith(joinedB) || joinedB.startsWith(joinedA)) {
       return true;
     }
   }
 
-  // Token subset match: e.g. "حسن محمد" vs "حسن محمد عثمان"
+  // First token MUST match to ensure first name is identical
+  if (tokensA[0] !== tokensB[0]) {
+    return false;
+  }
+
+  // If both have at least 2 tokens, second token must match as well
+  if (tokensA.length >= 2 && tokensB.length >= 2) {
+    if (tokensA[1] !== tokensB[1]) {
+      return false;
+    }
+  }
+
   const [shorter, longer] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA];
   const longerSet = new Set(longer);
 
   // Check if all tokens of the shorter name exist in the longer name
   const allShorterMatch = shorter.every((t) => longerSet.has(t));
   if (allShorterMatch && shorter.length >= 2) {
-    return true;
-  }
-
-  // Overlap count for longer or multi-token names
-  let matchCount = 0;
-  shorter.forEach((t) => {
-    if (longerSet.has(t)) matchCount++;
-  });
-
-  if (matchCount >= 2 && matchCount / shorter.length >= 0.6) {
     return true;
   }
 
@@ -128,72 +130,147 @@ export function isArabicNameMatch(nameA?: string, nameB?: string): boolean {
 export function normalizeBranchKey(branch?: string): string {
   if (!branch) return '';
   const norm = normalizeArabicText(branch);
+
   if (
     norm.includes('اكتوبر') ||
     norm.includes('مركزي') ||
     norm.includes('رئيسي') ||
+    norm.includes('الجيزه') ||
+    norm.includes('جيزه') ||
     norm.includes('october') ||
+    norm.includes('giza') ||
     norm.includes('main')
   ) {
     return 'main';
   }
-  if (norm.includes('منيا القمح') || norm.includes('القمح') || norm.includes('meq')) {
+
+  // Minya El-Qamh (Sharqia) - Must be evaluated before general Minya
+  if (
+    norm.includes('منيا القمح') ||
+    norm.includes('القمح') ||
+    norm.includes('meq') ||
+    norm.includes('شرقيه') ||
+    norm.includes('زقازيق')
+  ) {
     return 'meq';
   }
-  if (norm.includes('منيا') || norm.includes('minya')) {
+
+  // Minya (Upper Egypt)
+  if (
+    norm.includes('المنيا') ||
+    norm.includes('منيا') ||
+    norm.includes('عروس الصعيد') ||
+    norm.includes('طه حسين') ||
+    norm.includes('minya') ||
+    norm.includes('min')
+  ) {
     return 'minya';
   }
-  if (norm.includes('فيوم') || norm.includes('fayoum')) {
+
+  // Dimeshalt (Dakahlia / Mansoura)
+  if (
+    norm.includes('ديمشلت') ||
+    norm.includes('دكرنس') ||
+    norm.includes('منصوره') ||
+    norm.includes('دقهليه') ||
+    norm.includes('dimeshalt') ||
+    norm.includes('dim')
+  ) {
+    return 'dimeshalt';
+  }
+
+  // Fayoum
+  if (norm.includes('فيوم') || norm.includes('الفيوم') || norm.includes('fayoum') || norm.includes('fay')) {
     return 'fayoum';
   }
-  if (norm.includes('قاهره') || norm.includes('cairo')) {
+
+  // Cairo
+  if (
+    norm.includes('قاهره') ||
+    norm.includes('القاهره') ||
+    norm.includes('مدينة نصر') ||
+    norm.includes('وسط البلد') ||
+    norm.includes('cairo') ||
+    norm.includes('cai')
+  ) {
     return 'cairo';
   }
+
+  // Beheira / Damanhour
   if (
     norm.includes('بحيره') ||
+    norm.includes('البحيره') ||
     norm.includes('دمنهور') ||
     norm.includes('beheira') ||
-    norm.includes('damanhour')
+    norm.includes('damanhour') ||
+    norm.includes('beh')
   ) {
     return 'beheira';
   }
-  if (norm.includes('ديمشلت') || norm.includes('dimeshalt')) {
-    return 'dimeshalt';
-  }
-  if (norm.includes('منوف') || norm.includes('menouf')) {
+
+  // Menouf / Menoufia
+  if (
+    norm.includes('منوف') ||
+    norm.includes('المنوفيه') ||
+    norm.includes('شبين') ||
+    norm.includes('menouf') ||
+    norm.includes('mnf')
+  ) {
     return 'menouf';
   }
+
   return norm;
 }
 
 /**
  * Check if two branch references match
  */
-export function isBranchMatch(branchA?: string, branchB?: string): boolean {
-  if (!branchA || !branchB) return true; // Tolerant if unassigned
-  const keyA = normalizeBranchKey(branchA);
-  const keyB = normalizeBranchKey(branchB);
-  if (!keyA || !keyB) return true;
+export function isBranchMatch(
+  branchA?: string,
+  branchB?: string,
+  options: { allowUnassigned?: boolean } = { allowUnassigned: true }
+): boolean {
+  const normA = (branchA || '').trim();
+  const normB = (branchB || '').trim();
+
+  if (!normA && !normB) return true;
+
+  if (!normA || !normB) {
+    return options.allowUnassigned !== false;
+  }
+
+  const keyA = normalizeBranchKey(normA);
+  const keyB = normalizeBranchKey(normB);
+
+  if (!keyA || !keyB) {
+    return options.allowUnassigned !== false;
+  }
+
   return keyA === keyB;
 }
 
 /**
  * Check if a customer strictly belongs to a specific sales rep
+ * Enforces strict branch boundary first, then verifies identity.
  */
 export function doesCustomerBelongToRep(customer: Customer, repUser: User): boolean {
   if (!repUser) return false;
 
-  // 1. Direct ID match
+  // 1. STRICT Branch Verification:
+  // If rep has a branch and customer has a branch, they MUST belong to the SAME branch!
+  // A rep in "فرع المنيا" can NEVER own or see a customer whose branch is "فرع ديمشلت"!
+  if (repUser.branchName && customer.branchName) {
+    if (!isBranchMatch(customer.branchName, repUser.branchName, { allowUnassigned: false })) {
+      return false;
+    }
+  }
+
+  // 2. Direct ID match (only valid when branch compatibility is established)
   if (customer.repId && customer.repId === repUser.id) {
     return true;
   }
 
-  // 2. Branch compatibility check (if customer specifies branch and rep has branch)
-  if (!isBranchMatch(customer.branchName, repUser.branchName)) {
-    return false;
-  }
-
-  // 3. Name / Username match with intelligent Arabic tolerance
+  // 3. Match by Name / Username / Phone on the customer's rep field
   const repField = (customer.salesRepName || customer.repName || '').trim();
   if (!repField) return false;
 
@@ -214,9 +291,11 @@ export function doesCustomerBelongToSupervisor(
 ): boolean {
   if (!supervisorUser) return false;
 
-  // 1. Branch check
-  if (!isBranchMatch(customer.branchName, supervisorUser.branchName)) {
-    return false;
+  // 1. STRICT Branch Verification
+  if (supervisorUser.branchName && customer.branchName) {
+    if (!isBranchMatch(customer.branchName, supervisorUser.branchName, { allowUnassigned: false })) {
+      return false;
+    }
   }
 
   // 2. Check if assigned directly to the supervisor
@@ -224,11 +303,12 @@ export function doesCustomerBelongToSupervisor(
     return true;
   }
 
-  // 3. Find all sales reps belonging to this supervisor
+  // 3. Find all sales reps belonging to this supervisor in the same branch
   const supervisedReps = allUsers.filter(
     (u) =>
       u.supervisorId === supervisorUser.id ||
-      (u.role === 'sales_rep' && isBranchMatch(u.branchName, supervisorUser.branchName))
+      (u.role === 'sales_rep' &&
+        isBranchMatch(u.branchName, supervisorUser.branchName, { allowUnassigned: false }))
   );
 
   // 4. Check if customer belongs to any of these reps
@@ -240,5 +320,41 @@ export function doesCustomerBelongToSupervisor(
  */
 export function doesCustomerBelongToBranch(customer: Customer, branchName?: string): boolean {
   if (!branchName) return true;
-  return isBranchMatch(customer.branchName, branchName);
+  if (!customer.branchName) return true;
+  return isBranchMatch(customer.branchName, branchName, { allowUnassigned: false });
 }
+
+/**
+ * Robustly resolve product branch stock in cartons for a target branch using normalized matching
+ */
+export function getBranchStockForProduct(product: Product, targetBranch?: string): number {
+  if (!product) return 0;
+  if (!targetBranch || targetBranch === 'الكل') {
+    return product.branchStockActual || 0;
+  }
+
+  const targetKey = normalizeBranchKey(targetBranch);
+
+  // 1. Direct branchStocks map lookup by normalized keys
+  if (product.branchStocks && typeof product.branchStocks === 'object') {
+    for (const [key, stock] of Object.entries(product.branchStocks)) {
+      if (typeof stock === 'number' && !isNaN(stock)) {
+        if (normalizeBranchKey(key) === targetKey) {
+          return stock;
+        }
+      }
+    }
+  }
+
+  // 2. If product has a single branchName assigned, verify branch match
+  if (product.branchName) {
+    if (normalizeBranchKey(product.branchName) === targetKey) {
+      return product.branchStockActual || 0;
+    }
+    return 0;
+  }
+
+  // 3. Fallback to product.branchStockActual
+  return product.branchStockActual || 0;
+}
+

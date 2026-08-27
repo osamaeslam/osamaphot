@@ -35,6 +35,7 @@ import {
   doesCustomerBelongToSupervisor,
   isArabicNameMatch,
   isBranchMatch,
+  getBranchStockForProduct,
 } from '../services/arabicMatchingService';
 
 interface OrderBuilderModalProps {
@@ -799,8 +800,10 @@ export const OrderBuilderModal: React.FC<OrderBuilderModalProps> = ({
                   const p = liveProd;
                   const cartonQty = p.cartonQuantity && p.cartonQuantity > 0 ? p.cartonQuantity : 1;
 
-                  const branchAvail = Math.max(0, p.branchStockReserved);
-                  const mainAvail = Math.max(0, p.mainWarehouseReserved);
+                  const targetBranchForStock = customerBranch || currentUser?.branchName || '';
+                  const branchActual = getBranchStockForProduct(p, targetBranchForStock);
+                  const branchAvail = Math.max(0, branchActual - 5);
+                  const mainAvail = Math.max(0, p.mainWarehouseReserved || (p.mainWarehouseActual - 20));
                   const totalAvail = branchAvail + mainAvail;
 
                   const currentCarton = item.cartonCount || 0;

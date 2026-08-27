@@ -17,6 +17,7 @@ import {
   isArabicNameMatch,
   isBranchMatch,
   normalizeArabicText,
+  getBranchStockForProduct,
 } from '../services/arabicMatchingService';
 import {
   deleteUserFromSupabase,
@@ -813,29 +814,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  // Auto-link customer rep names to actual user accounts with Arabic matching & branch tolerance
+  // Auto-link customer rep names to actual user accounts with STRICT branch isolation & Arabic matching
   const linkCustomersToUsers = (list: Customer[], userList: User[]): Customer[] => {
     if (!userList || userList.length === 0) return list;
 
     const reps = userList.filter((u) => u.role === 'sales_rep' || u.role === 'supervisor' || u.role === 'branch_manager');
 
     return list.map((c) => {
-      const rawRep = (c.salesRepName || c.repName || '').trim();
-      if (!rawRep || rawRep === 'مندوب المبيعات' || rawRep === 'المندوب') return c;
+      let updated = { ...c };
 
-      // Match rep using intelligent Arabic matching + branch compatibility
-      const matched = reps.find((u) => doesCustomerBelongToRep(c, u) || isArabicNameMatch(rawRep, u.name) || (u.username && isArabicNameMatch(rawRep, u.username)));
+      // 1. If customer has an existing repId, verify that the assigned rep's branch matches the customer's branch!
+      if (updated.repId && updated.branchName) {
+        const currentLinkedUser = userList.find((u) => u.id === updated.repId);
+        if (
+          currentLinkedUser?.branchName &&
+          !isBranchMatch(updated.branchName, currentLinkedUser.branchName, { allowUnassigned: false })
+        ) {
+          // Cross-branch contamination detected! Unlink this invalid repId.
+          updated = { ...updated, repId: undefined };
+        }
+      }
+
+      const rawRep = (updated.salesRepName || updated.repName || '').trim();
+      if (!rawRep || rawRep === 'مندوب المبيعات' || rawRep === 'المندوب') {
+        return updated;
+      }
+
+      // 2. Filter candidates strictly to reps in the SAME branch if customer has a branch
+      const branchCompatibleReps = updated.branchName
+        ? reps.filter((u) => !u.branchName || isBranchMatch(updated.branchName, u.branchName, { allowUnassigned: false }))
+        : reps;
+
+      // 3. Find matched rep strictly in that branch
+      const matched = branchCompatibleReps.find(
+        (u) =>
+          isArabicNameMatch(rawRep, u.name) ||
+          (u.username && isArabicNameMatch(rawRep, u.username)) ||
+          (u.phone && rawRep.includes(u.phone))
+      );
 
       if (matched) {
         return {
-          ...c,
+          ...updated,
           repName: matched.name,
           repId: matched.id,
           salesRepName: matched.name,
-          branchName: c.branchName || matched.branchName,
+          branchName: updated.branchName || matched.branchName,
         };
       }
-      return c;
+      return updated;
     });
   };
 
@@ -2456,18 +2483,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const getVisibleProducts = (): Product[] => {
-  if (!currentUser) return products;
+    if (!currentUser) return products;
 
     if (currentUser.role === 'admin' || currentUser.role === 'developer') {
       if (selectedBranchFilter !== 'الكل') {
-        return products.filter(p => !p.branchName || p.branchName === selectedBranchFilter || p.mainWarehouseActual > 0);
+        return products.filter(
+          (p) =>
+            getBranchStockForProduct(p, selectedBranchFilter) > 0 ||
+            p.mainWarehouseActual > 0 ||
+            (!p.branchName && (p.branchStockActual || 0) > 0)
+        );
       }
       return products;
     }
 
-    // Reps & Branch supervisors only see items in their branch or available from central warehouse
+    // Reps, Supervisors & Branch managers: products available in their branch or available from central warehouse
+    const targetBranch = currentUser.branchName;
     return products.filter(
-      p => !p.branchName || p.branchName === currentUser.branchName || p.mainWarehouseActual > 0
+      (p) =>
+        getBranchStockForProduct(p, targetBranch) > 0 ||
+        p.mainWarehouseActual > 0 ||
+        (!p.branchName && (p.branchStockActual || 0) > 0)
     );
   };
 
