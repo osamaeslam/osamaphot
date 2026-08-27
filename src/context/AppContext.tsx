@@ -154,6 +154,7 @@ interface AppContextType {
   // Helpers for RBAC
   getVisibleInvoices: () => Invoice[];
   getVisibleProducts: () => Product[];
+  getVisibleCustomers: () => Customer[];
   getSupervisorsInBranch: (branchName?: string) => User[];
   getSalesRepsForSupervisor: (supervisorId: string) => User[];
   loginAs: (userId: string) => void;
@@ -820,7 +821,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .toLowerCase()
         .replace(/[أإآ]/g, 'ا')
         .replace(/ة/g, 'ه')
-        .replace(/����/g, 'ي')
+        .replace(/������/g, 'ي')
         .replace(/ؤ/g, 'و')
         .replace(/ئ/g, 'ي')
         .replace(/ء/g, '')
@@ -1022,7 +1023,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (found.password && found.password.trim().length > 0) {
       const dbPass = found.password.trim();
       if (dbPass !== cleanPass) {
-        return { success: false, message: 'كلمة المرور غير صحيحة. يرجى التأكد من كتابة كلمة المرور بدقة.' };
+        return { success: false, message: 'كلمة المرور غير صحيحة. يرجى التأكد من كتابة كل��ة المرور بدقة.' };
       }
     } else if (cleanPass) {
       // First-time setup: user sets their password
@@ -2420,8 +2421,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return invoices.filter(i => i.repId === currentUser.id || i.repName === currentUser.name);
   };
 
+  const getVisibleCustomers = (): Customer[] => {
+    if (!currentUser) return [];
+    if (currentUser.role === 'admin' || currentUser.role === 'developer') return customers;
+    if (currentUser.role === 'branch_manager') {
+      return customers.filter((c) => c.branchName === currentUser.branchName);
+    }
+    if (currentUser.role === 'supervisor') {
+      const repIds = users
+        .filter((u) => u.supervisorId === currentUser.id && u.branchName === currentUser.branchName)
+        .map((u) => u.id);
+      return customers.filter((c) =>
+        c.branchName === currentUser.branchName &&
+        (c.repId === currentUser.id || (c.repId ? repIds.includes(c.repId) : c.repName === currentUser.name))
+      );
+    }
+    return customers.filter((c) =>
+      c.branchName === currentUser.branchName &&
+      (c.repId === currentUser.id || c.repName === currentUser.name || c.salesRepName === currentUser.name)
+    );
+  };
+
   const getVisibleProducts = (): Product[] => {
-    if (!currentUser) return products;
+  if (!currentUser) return products;
 
     if (currentUser.role === 'admin' || currentUser.role === 'developer') {
       if (selectedBranchFilter !== 'الكل') {
