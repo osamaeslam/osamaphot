@@ -893,18 +893,42 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
   const errors: string[] = [];
   const customers: Customer[] = [];
 
-  // Customer sheet intentionally supports only the four ownership columns.
-  // Extra columns are ignored so customer visibility cannot depend on contact details.
+  // Customer sheet priority columns: كود العميل | اسم العميل | الفرع التابع له | اسم المندوب
   const colMap: Record<string, number> = {
     code: -1,
     name: -1,
     branchName: -1,
     repName: -1,
+    phone: -1,
+    address: -1,
+    taxNumber: -1,
+    tier: -1,
+    notes: -1,
   };
 
   headers.forEach((h, idx) => {
     const norm = normalizeHeader(h);
+    
+    // 1. Check Sales Rep first (to prevent "اسم المندوب" from being captured as customer name)
     if (
+      norm.includes('مندوب') ||
+      norm.includes('المندوب') ||
+      norm.includes('rep') ||
+      norm.includes('sales') ||
+      norm.includes('بائع') ||
+      norm.includes('مسؤول') ||
+      norm.includes('مسئول') ||
+      norm.includes('مسوول') ||
+      norm.includes('اسمالمندوب')
+    ) {
+      if (colMap.repName === -1) colMap.repName = idx;
+    }
+    // 2. Check Branch
+    else if (norm.includes('فرع') || norm.includes('branch')) {
+      if (colMap.branchName === -1) colMap.branchName = idx;
+    }
+    // 3. Check Customer Code
+    else if (
       norm.includes('كود') ||
       norm.includes('code') ||
       norm.includes('رقم العميل') ||
@@ -913,27 +937,22 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
       norm.includes('custid')
     ) {
       if (colMap.code === -1) colMap.code = idx;
-    } else if (
-      norm.includes('اسم') ||
+    }
+    // 4. Check Customer Name
+    else if (
       norm.includes('عميل') ||
       norm.includes('محل') ||
       norm.includes('تاجر') ||
-      (norm.includes('customer') ||
+      norm.includes('زبون') ||
+      norm.includes('customer') ||
       norm.includes('client') ||
-      norm.includes('name')) &&
-      !norm.includes('مندوب') && !norm.includes('مسؤول') && !norm.includes('rep')
+      norm.includes('اسم') ||
+      norm.includes('name')
     ) {
       if (colMap.name === -1) colMap.name = idx;
-    } else if (
-      norm.includes('تصنيف') ||
-      norm.includes('فئة') ||
-      norm.includes('فئه') ||
-      norm.includes('tier') ||
-      norm.includes('درجة') ||
-      norm.includes('درجه')
-    ) {
-      if (colMap.tier === -1) colMap.tier = idx;
-    } else if (
+    }
+    // 5. Optional extra fields
+    else if (
       norm.includes('تليفون') ||
       norm.includes('هاتف') ||
       norm.includes('موبايل') ||
@@ -952,16 +971,29 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
       norm.includes('city')
     ) {
       if (colMap.address === -1) colMap.address = idx;
-    } else if (norm.includes('فرع') || norm.includes('branch')) {
-      if (colMap.branchName === -1) colMap.branchName = idx;
-    } else if (norm.includes('مندوب') || norm.includes('المندوبالحالي') || norm.includes('rep') || norm.includes('مسؤول')) {
-      if (colMap.repName === -1) colMap.repName = idx;
+    } else if (
+      norm.includes('تصنيف') ||
+      norm.includes('فئة') ||
+      norm.includes('فئه') ||
+      norm.includes('tier') ||
+      norm.includes('درجة') ||
+      norm.includes('درجه')
+    ) {
+      if (colMap.tier === -1) colMap.tier = idx;
     } else if (norm.includes('ضريب') || norm.includes('tax') || norm.includes('سجل')) {
       if (colMap.taxNumber === -1) colMap.taxNumber = idx;
     } else if (norm.includes('ملاحظ') || norm.includes('note')) {
       if (colMap.notes === -1) colMap.notes = idx;
     }
   });
+
+  // Positional fallback if standard 4-column format without specific header keywords
+  if (colMap.code === -1 && colMap.name === -1 && headers.length >= 4) {
+    colMap.code = 0;
+    colMap.name = 1;
+    colMap.branchName = 2;
+    colMap.repName = 3;
+  }
 
   const getVal = (row: any[], colIdx: number, def = ''): string => {
     if (colIdx === -1 || colIdx >= row.length) return def;
@@ -1032,8 +1064,11 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
       if (!existing.address && rawAddress) existing.address = rawAddress;
       if (!existing.taxNumber && rawTax) existing.taxNumber = rawTax;
       if (!existing.notes && rawNotes) existing.notes = rawNotes;
-      if (rawRep && existing.repName === 'مندوب المبيعات') existing.repName = rawRep;
-      if (rawBranch && existing.branchName.includes('المخزن المركزي')) {
+      if (rawRep) {
+        existing.repName = rawRep;
+        existing.salesRepName = rawRep;
+      }
+      if (rawBranch) {
         existing.branchName = normalizeExcelBranchName(rawBranch);
       }
       if (tier === 'مميز' || (tier === 'راقي' && existing.tier === 'متوسط')) {
@@ -1048,8 +1083,9 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
         tier: tier,
         phone: rawPhone,
         address: rawAddress,
-        branchName: normalizeExcelBranchName(rawBranch || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)'),
-        repName: rawRep || 'مندوب المبيعات',
+        branchName: normalizeExcelBranchName(rawBranch || 'فرع القاهرة'),
+        repName: rawRep || '',
+        salesRepName: rawRep || '',
         taxNumber: rawTax,
         notes: rawNotes,
         createdAt: new Date().toISOString(),
@@ -1276,28 +1312,34 @@ export function generateSampleCustomersTemplate(): void {
   const sampleCustomers: Customer[] = [
     {
       id: 'sample-cust-1',
-      code: 'CUST-001',
-      name: 'هايبر ماركت التوحيد والنور',
-      storeName: 'هايبر ماركت التوحيد والنور',
+      code: 'CUST-101',
+      name: 'سنتر الأمل للتجارة',
+      storeName: 'سنتر الأمل للتجارة',
       phone: '01011122233',
-      branchName: 'فرع القاهرة (المعادي ومدينة نصر والتجمع)',
-      governorate: 'القاهرة',
-      address: 'شارع مكرم عبيد، مدينة نصر',
-      taxNumber: '341-987-123',
-      notes: 'عميل مميز - خصم خاص'
+      branchName: 'فرع القاهرة',
+      repName: 'أحمد محمود',
+      salesRepName: 'أحمد محمود',
     },
     {
       id: 'sample-cust-2',
-      code: 'CUST-002',
-      name: 'سلسلة محلات سنتر شاهين',
-      storeName: 'سلسلة محلات سنتر شاهين',
-      phone: '01244455566',
-      branchName: 'فرع الجيزة (الهرم وفيصل والدقي)',
-      governorate: 'الجيزة',
-      address: 'شارع فيصل الرئيسي، الجيزة',
-      taxNumber: '552-881-440',
-      notes: 'دفع آجل 30 يوم'
-    }
+      code: 'CUST-102',
+      name: 'معرض النور للأدوات المنزلية',
+      storeName: 'معرض النور للأدوات المنزلية',
+      phone: '01122233344',
+      branchName: 'فرع الفيوم',
+      repName: 'محمود عبد الرحيم',
+      salesRepName: 'محمود عبد الرحيم',
+    },
+    {
+      id: 'sample-cust-3',
+      code: 'CUST-103',
+      name: 'محلات الهلال والنجمة',
+      storeName: 'محلات الهلال والنجمة',
+      phone: '01233344455',
+      branchName: 'فرع المنيا',
+      repName: 'مصطفى القوصي',
+      salesRepName: 'مصطفى القوصي',
+    },
   ];
 
   exportCustomersToExcel(sampleCustomers);

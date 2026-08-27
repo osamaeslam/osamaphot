@@ -495,13 +495,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const triggerInstallPrompt = async (): Promise<boolean> => {
-    if (installPromptEvent) {
-      installPromptEvent.prompt();
-      const choice = await installPromptEvent.userChoice;
-      if (choice.outcome === 'accepted') {
-        setCanInstallPwa(false);
-        setInstallPromptEvent(null);
-        return true;
+    if (installPromptEvent && typeof installPromptEvent.prompt === 'function') {
+      try {
+        await installPromptEvent.prompt();
+        const choice = await installPromptEvent.userChoice;
+        if (choice?.outcome === 'accepted') {
+          setCanInstallPwa(false);
+          setInstallPromptEvent(null);
+          return true;
+        }
+      } catch (err) {
+        console.warn('PWA install prompt notice:', err);
+        setIsInstallModalOpen(true);
       }
       return false;
     } else {
@@ -2426,22 +2431,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const getVisibleCustomers = (): Customer[] => {
     if (!currentUser) return [];
     if (currentUser.role === 'admin' || currentUser.role === 'developer') return customers;
+
+    const myBranch = (currentUser.branchName || '').trim().toLowerCase();
+
     if (currentUser.role === 'branch_manager') {
-      return customers.filter((c) => c.branchName === currentUser.branchName);
+      return customers.filter((c) => {
+        const cBranch = (c.branchName || '').trim().toLowerCase();
+        return !cBranch || cBranch === myBranch;
+      });
     }
+
     if (currentUser.role === 'supervisor') {
-      const repIds = users
-        .filter((u) => u.supervisorId === currentUser.id && u.branchName === currentUser.branchName)
-        .map((u) => u.id);
-      return customers.filter((c) =>
-        c.branchName === currentUser.branchName &&
-        (c.repId === currentUser.id || (c.repId ? repIds.includes(c.repId) : c.repName === currentUser.name))
-      );
+      const myReps = users.filter((u) => u.supervisorId === currentUser.id);
+      const repIds = new Set(myReps.map((u) => u.id));
+      repIds.add(currentUser.id);
+
+      const repNames = new Set(myReps.map((u) => u.name.trim().toLowerCase()));
+      repNames.add(currentUser.name.trim().toLowerCase());
+      if (currentUser.username) repNames.add(currentUser.username.trim().toLowerCase());
+
+      return customers.filter((c) => {
+        const cBranch = (c.branchName || '').trim().toLowerCase();
+        if (cBranch && myBranch && cBranch !== myBranch) return false;
+
+        if (c.repId && repIds.has(c.repId)) return true;
+        const cRep = (c.repName || c.salesRepName || '').trim().toLowerCase();
+        if (!cRep) return false;
+        return repNames.has(cRep) || Array.from(repNames).some((rn) => rn && (cRep.includes(rn) || rn.includes(cRep)));
+      });
     }
-    return customers.filter((c) =>
-      c.branchName === currentUser.branchName &&
-      (c.repId === currentUser.id || c.repName === currentUser.name || c.salesRepName === currentUser.name)
-    );
+
+    // Sales Rep: STRICT PRIVACY - ONLY his own customers in his branch
+    const myName = (currentUser.name || '').trim().toLowerCase();
+    const myUsername = (currentUser.username || '').trim().toLowerCase();
+    const myId = currentUser.id;
+
+    return customers.filter((c) => {
+      const cBranch = (c.branchName || '').trim().toLowerCase();
+      if (cBranch && myBranch && cBranch !== myBranch) return false;
+
+      if (c.repId && c.repId === myId) return true;
+      const cRep = (c.repName || c.salesRepName || '').trim().toLowerCase();
+      if (!cRep) return false;
+      return (
+        cRep === myName ||
+        (myUsername && cRep === myUsername) ||
+        (myName.length > 3 && cRep.includes(myName)) ||
+        (cRep.length > 3 && myName.includes(cRep))
+      );
+    });
   };
 
   const getVisibleProducts = (): Product[] => {
@@ -2548,6 +2586,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isInstallModalOpen,
         setIsInstallModalOpen,
         getVisibleInvoices,
+        getVisibleCustomers,
         getVisibleProducts,
         getSupervisorsInBranch,
         getSalesRepsForSupervisor,

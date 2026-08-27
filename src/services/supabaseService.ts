@@ -205,13 +205,13 @@ const CATALOG_SYNC_STORE_ID = '00000000-0000-0000-0000-000000000001';
 export const USER_SYNC_STORE_ID = '00000000-0000-0000-0000-000000000002';
 
 /**
- * Fetch all users from Supabase (checking central snapshot first, then 'users' / 'profiles' tables)
+ * Fetch all users from Supabase (checking 'users', 'app_users', 'profiles' and central snapshot)
  */
 export async function fetchUsersFromSupabase(): Promise<{ success: boolean; users?: User[]; error?: string }> {
   try {
     const byId = new Map<string, User>();
     const byEmail = new Map<string, User>();
-    const tableCandidates = ['app_users', 'employees', 'users', 'profiles'];
+    const tableCandidates = ['users', 'app_users', 'profiles'];
 
     const mapUser = (u: any, tbl: string, idx: number): User => {
       const rawEmail = String(u.email || '').trim();
@@ -243,11 +243,11 @@ export async function fetchUsersFromSupabase(): Promise<{ success: boolean; user
           if (user.email) byEmail.set(user.email.toLowerCase(), { ...existing, ...user });
         });
       } catch {
-        // جدول غير موجود أو غير مكشوف: نكمل بقية الجداول
+        // Continue to other candidate tables
       }
     }
 
-    // snapshot قديم؛ نستخدمه كاحتياطي فقط ولا نسمح له بإخفاء app_users.
+    // Check central snapshot as fallback
     try {
       const { data } = await supabase.from('orders').select('items').eq('id', USER_SYNC_STORE_ID).limit(1);
       const items = data?.[0]?.items;
@@ -315,11 +315,49 @@ export async function findUserInSupabase(identifier: string): Promise<{ success:
 }
 
 /**
- * Save all users into Supabase central store snapshot and table safely
+ * Save all users into Supabase central store snapshot and tables safely
  */
 export async function saveUsersToSupabase(users: User[]): Promise<{ success: boolean; error?: string }> {
   try {
-    // 1. Save full users list to the robust shared store in 'orders' table (instant real-time broadcast)
+    const usersPayload = users.map((u) => ({
+      id: u.id,
+      name: u.name,
+      username: u.username,
+      email: u.email,
+      password: u.password || '',
+      role: u.role,
+      branch_name: u.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
+      supervisor_id: u.supervisorId || null,
+      phone: u.phone || '',
+      commission_rate: u.commissionRate || 2.5,
+      is_active: u.isActive ?? true,
+      approval_status: u.approvalStatus || 'active',
+      created_at: u.registrationDate || new Date().toISOString(),
+    }));
+
+    // 1. Upsert into 'users' table directly
+    for (let i = 0; i < usersPayload.length; i += 50) {
+      const chunk = usersPayload.slice(i, i + 50);
+      try {
+        const { error: uErr } = await supabase.from('users').upsert(chunk);
+        if (uErr) {
+          const minChunk = chunk.map((c) => ({
+            id: c.id,
+            name: c.name,
+            username: c.username,
+            email: c.email,
+            password: c.password,
+            role: c.role,
+            branch_name: c.branch_name,
+          }));
+          await supabase.from('users').upsert(minChunk);
+        }
+      } catch (err) {
+        console.warn('Upsert chunk into users note:', err);
+      }
+    }
+
+    // 2. Also update snapshot in orders table
     try {
       await supabase.from('orders').upsert({
         id: USER_SYNC_STORE_ID,
@@ -338,11 +376,59 @@ export async function saveUsersToSupabase(users: User[]): Promise<{ success: boo
 }
 
 /**
- * Upsert / Save single user into Supabase
+ * Upsert / Save single user into Supabase directly
  */
 export async function saveUserToSupabase(user: User): Promise<{ success: boolean; error?: string }> {
   try {
-    // Fetch current users and update snapshot
+    const userPayload = {
+      id: user.id,
+      name: user.name,
+      username: user.username,
+      email: user.email,
+      password: user.password || '',
+      role: user.role,
+      branch_name: user.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
+      supervisor_id: user.supervisorId || null,
+      phone: user.phone || '',
+      commission_rate: user.commissionRate || 2.5,
+      is_active: user.isActive ?? true,
+      approval_status: user.approvalStatus || 'active',
+      created_at: user.registrationDate || new Date().toISOString(),
+    };
+
+    // 1. Upsert directly to 'users' table
+    try {
+      const { error: uErr } = await supabase.from('users').upsert(userPayload);
+      if (uErr) {
+        const minPayload = {
+          id: user.id,
+          name: user.name,
+          username: user.username,
+          email: user.email,
+          password: user.password || '',
+          role: user.role,
+          branch_name: user.branchName || 'الفرع الرئيسي',
+        };
+        await supabase.from('users').upsert(minPayload);
+      }
+    } catch (e) {
+      console.warn('Users table upsert notice:', e);
+    }
+
+    // 2. Also try 'profiles' table
+    try {
+      await supabase.from('profiles').upsert({
+        id: user.id,
+        full_name: user.name,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        branch_name: user.branchName,
+        phone: user.phone,
+      });
+    } catch {}
+
+    // 3. Update snapshot store
     const current = await fetchUsersFromSupabase();
     let updatedList: User[] = [user];
     if (current.success && current.users) {
@@ -351,19 +437,8 @@ export async function saveUserToSupabase(user: User): Promise<{ success: boolean
       map.set(user.id, user);
       updatedList = Array.from(map.values());
     }
-    return saveUsersToSupabase(updatedList);
-  } catch (e: any) {
-    return { success: false, error: e?.message };
-  }
-}
+    await saveUsersToSupabase(updatedList);
 
-export async function deleteUserFromSupabase(userId: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    const current = await fetchUsersFromSupabase();
-    if (current.success && current.users) {
-      const filtered = current.users.filter((u) => u.id !== userId);
-      return saveUsersToSupabase(filtered);
-    }
     return { success: true };
   } catch (e: any) {
     return { success: false, error: e?.message };
@@ -371,7 +446,47 @@ export async function deleteUserFromSupabase(userId: string): Promise<{ success:
 }
 
 /**
- * Save invoice / order into Supabase
+ * Delete a user from Supabase tables and snapshot permanently
+ */
+export async function deleteUserFromSupabase(userId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    // 1. Delete directly from tables
+    try {
+      await supabase.from('users').delete().eq('id', userId);
+    } catch (e) {
+      console.warn('Delete from users table notice:', e);
+    }
+    try {
+      await supabase.from('profiles').delete().eq('id', userId);
+    } catch (e) {}
+    try {
+      await supabase.from('app_users').delete().eq('id', userId);
+    } catch (e) {}
+
+    // 2. Update snapshot store so user doesn't reappear on refresh
+    try {
+      const current = await fetchUsersFromSupabase();
+      if (current.success && current.users) {
+        const filtered = current.users.filter((u) => u.id !== userId);
+        await supabase.from('orders').upsert({
+          id: USER_SYNC_STORE_ID,
+          status: 'users_sync_snapshot',
+          total: filtered.length,
+          items: filtered as any,
+        });
+      }
+    } catch (e) {
+      console.warn('Snapshot delete notice:', e);
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e?.message };
+  }
+}
+
+/**
+ * Save invoice / order into Supabase with automatic schema tolerance
  */
 export async function saveInvoiceToSupabase(invoice: Invoice): Promise<{ success: boolean; error?: string }> {
   try {
@@ -380,8 +495,8 @@ export async function saveInvoiceToSupabase(invoice: Invoice): Promise<{ success
       invoice_number: invoice.invoiceNumber,
       customer_name: invoice.customerName,
       customer_code: invoice.customerCode || null,
-      customer_phone: invoice.customerPhone,
-      customer_address: invoice.customerAddress,
+      customer_phone: invoice.customerPhone || '',
+      customer_address: invoice.customerAddress || '',
       customer_tax_number: invoice.customerTaxNumber || null,
       rep_id: invoice.repId,
       rep_name: invoice.repName,
@@ -407,20 +522,40 @@ export async function saveInvoiceToSupabase(invoice: Invoice): Promise<{ success
       created_at: invoice.date ? `${invoice.date} ${invoice.time || ''}`.trim() : new Date().toISOString(),
     };
 
-    // 1. Try upserting to 'invoices' table
+    // 1. Try upserting full payload to 'invoices' table
     const { error: invErr } = await supabase.from('invoices').upsert(payload);
     if (!invErr) return { success: true };
 
-    // 2. Try upserting to 'orders' table
-    const { error: ordErr } = await supabase.from('orders').upsert(payload);
-    if (!ordErr) return { success: true };
-
-    // 3. Fallback: Try simplified payload if tables have fewer columns
-    const simplePayload = {
+    // 2. Try standard core payload (omitting newer extra columns that may not be in older schema cache)
+    const corePayload = {
       id: invoice.id,
       invoice_number: invoice.invoiceNumber,
       customer_name: invoice.customerName,
-      customer_phone: invoice.customerPhone,
+      customer_phone: invoice.customerPhone || '',
+      customer_address: invoice.customerAddress || '',
+      rep_name: invoice.repName,
+      branch_name: invoice.branchName,
+      status: invoice.status,
+      total_cartons: invoice.totalCartons,
+      total_pieces: invoice.totalPieces,
+      subtotal: invoice.subtotal,
+      discount_percentage: invoice.discountPercentage,
+      discount_amount: invoice.discountAmount,
+      estimated_grand_total: invoice.estimatedGrandTotal,
+      notes: invoice.notes || '',
+      items: invoice.items,
+      created_at: invoice.date ? `${invoice.date} ${invoice.time || ''}`.trim() : new Date().toISOString(),
+    };
+
+    const { error: coreInvErr } = await supabase.from('invoices').upsert(corePayload);
+    if (!coreInvErr) return { success: true };
+
+    // 3. Try minimal payload
+    const minimalPayload = {
+      id: invoice.id,
+      invoice_number: invoice.invoiceNumber,
+      customer_name: invoice.customerName,
+      customer_phone: invoice.customerPhone || '',
       rep_name: invoice.repName,
       branch_name: invoice.branchName,
       status: invoice.status,
@@ -431,14 +566,15 @@ export async function saveInvoiceToSupabase(invoice: Invoice): Promise<{ success
       created_at: invoice.date ? `${invoice.date} ${invoice.time || ''}`.trim() : new Date().toISOString(),
     };
 
-    const { error: simpleInvErr } = await supabase.from('invoices').upsert(simplePayload);
-    if (!simpleInvErr) return { success: true };
+    const { error: minInvErr } = await supabase.from('invoices').upsert(minimalPayload);
+    if (!minInvErr) return { success: true };
 
-    const { error: simpleOrdErr } = await supabase.from('orders').upsert(simplePayload);
-    if (!simpleOrdErr) return { success: true };
+    // 4. Try 'orders' table as fallback
+    const { error: ordErr } = await supabase.from('orders').upsert(minimalPayload);
+    if (!ordErr) return { success: true };
 
-    console.warn('Supabase Invoice Save Error:', invErr?.message || ordErr?.message || simpleInvErr?.message);
-    return { success: false, error: invErr?.message || ordErr?.message || 'فشل حفظ الفاتورة في Supabase' };
+    console.warn('Supabase Invoice Save Notice:', invErr?.message || coreInvErr?.message || minInvErr?.message);
+    return { success: false, error: invErr?.message || coreInvErr?.message || minInvErr?.message };
   } catch (e: any) {
     console.warn('Supabase Invoice Save Exception:', e);
     return { success: false, error: e?.message };

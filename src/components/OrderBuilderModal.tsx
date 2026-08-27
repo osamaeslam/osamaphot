@@ -105,7 +105,9 @@ export const OrderBuilderModal: React.FC<OrderBuilderModalProps> = ({
     );
   };
 
-  const visibleCustomers = useMemo(() => getVisibleCustomers(), [getVisibleCustomers, customers, currentUser]);
+  const visibleCustomers = useMemo(() => {
+    return (typeof getVisibleCustomers === 'function' ? getVisibleCustomers() : customers) || [];
+  }, [getVisibleCustomers, customers, currentUser]);
 
   const myAssignedCustomersCount = useMemo(() => {
     return visibleCustomers.filter(isCustomerBelongingToCurrentRep).length;
@@ -145,7 +147,7 @@ export const OrderBuilderModal: React.FC<OrderBuilderModalProps> = ({
 
       return true;
     }).slice(0, 35);
-  }, [customers, customerSearchQuery, selectedCustomerTierFilter, customerRepScope, currentUser]);
+  }, [visibleCustomers, customerSearchQuery, selectedCustomerTierFilter, customerRepScope, currentUser]);
 
   const handleSelectCustomer = (c: Customer) => {
     setSelectedCustomerId(c.id);
