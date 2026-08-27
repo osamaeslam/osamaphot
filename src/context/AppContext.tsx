@@ -83,6 +83,7 @@ interface AppContextType {
   deleteCustomer: (customerId: string) => void;
   importCustomersList: (newCustomers: Customer[], mode?: 'merge' | 'replace') => void;
   cleanAndDeduplicateCustomers: () => { originalCount: number; deduplicatedCount: number; duplicatesRemoved: number };
+  refreshCustomerRepLinks: () => { updatedCount: number };
 
   // Auth actions
   login: (identifier: string, password?: string) => Promise<{ success: boolean; message: string; user?: User }>;
@@ -880,12 +881,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     saveCustomersToSupabase(finalCustomers).catch((e) => console.warn('Supabase customer bulk save error:', e));
   };
 
+  const refreshCustomerRepLinks = (): { updatedCount: number } => {
+    let updatedCount = 0;
+    setCustomers((prev) => {
+      const linked = linkCustomersToUsers(prev, users);
+      updatedCount = linked.filter(
+        (c, i) => c.repId !== prev[i]?.repId || c.branchName !== prev[i]?.branchName || c.salesRepName !== prev[i]?.salesRepName
+      ).length;
+      saveCustomersToSupabase(linked).catch(() => {});
+      return linked;
+    });
+    return { updatedCount };
+  };
+
   // Auto-link customers to users when user list changes (e.g. after Supabase fetch)
   useEffect(() => {
     if (users.length === 0 || customers.length === 0) return;
     setCustomers((prev) => {
       const linked = linkCustomersToUsers(prev, users);
-      const changed = linked.some((c, i) => c.repId !== prev[i]?.repId);
+      const changed = linked.some(
+        (c, i) => c.repId !== prev[i]?.repId || c.branchName !== prev[i]?.branchName || c.salesRepName !== prev[i]?.salesRepName
+      );
       if (!changed) return prev;
       saveCustomersToSupabase(linked).catch(() => {});
       return linked;
@@ -2554,6 +2570,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteCustomer,
         importCustomersList,
         cleanAndDeduplicateCustomers,
+        refreshCustomerRepLinks,
         login,
         register,
         logout,

@@ -15,6 +15,7 @@ import {
   Eye,
   EyeOff,
   Key,
+  Link,
   Lock,
   Percent,
   Phone,
@@ -35,14 +36,16 @@ import {
   Wrench,
   X
 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { doesCustomerBelongToRep } from '../services/arabicMatchingService';
 import { User, UserApprovalStatus, UserRole } from '../types';
 
 export const UserManager: React.FC = () => {
   const {
     users,
     branches,
+    customers,
     currentUser,
     addUser,
     updateUser,
@@ -52,6 +55,7 @@ export const UserManager: React.FC = () => {
     assignSupervisor,
     getSupervisorsInBranch,
     loginAs,
+    refreshCustomerRepLinks,
   } = useApp();
 
   const [showAddUserModal, setShowAddUserModal] = useState(false);
@@ -61,6 +65,7 @@ export const UserManager: React.FC = () => {
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('الكل');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [syncToast, setSyncToast] = useState<string | null>(null);
 
   const isSuperAdminOrDev = currentUser?.role === 'admin' || currentUser?.role === 'developer';
 
@@ -245,6 +250,22 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
     approvalStatus: 'active',
   });
 
+  const matchingCustomerCount = useMemo(() => {
+    if (!formData.name?.trim()) return 0;
+    const tempUser: User = {
+      id: editingUser?.id || 'temp-id',
+      name: formData.name.trim(),
+      username: formData.username?.trim() || '',
+      email: formData.email || '',
+      phone: formData.phone || '',
+      branchName: formData.branchName || '',
+      role: formData.role || 'sales_rep',
+      approvalStatus: 'active',
+      isActive: true,
+    };
+    return customers.filter((c) => doesCustomerBelongToRep(c, tempUser)).length;
+  }, [formData.name, formData.username, formData.email, formData.phone, formData.branchName, formData.role, editingUser, customers]);
+
   // Approval modal state
   const [approvingUser, setApprovingUser] = useState<User | null>(null);
   const [approvalSupervisorId, setApprovalSupervisorId] = useState<string>('');
@@ -397,21 +418,45 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
             </div>
           </div>
 
-          {isSuperAdminOrDev ? (
-            <button
-              onClick={handleOpenAddModal}
-              className="flex items-center justify-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black px-5 py-3 rounded-2xl text-xs sm:text-sm shadow-md transition transform active:scale-95 cursor-pointer"
-            >
-              <UserPlus className="w-4 h-4" />
-              <span>إضافة موظف جديد +</span>
-            </button>
-          ) : (
-            <div className="bg-amber-50 text-amber-800 border border-amber-200 px-3.5 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2">
-              <Lock className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>إضافة وتعديل الموظفين مقتصرة على الآدمن والمطور فقط</span>
-            </div>
-          )}
+          <div className="flex items-center flex-wrap gap-2">
+            {isSuperAdminOrDev && (
+              <button
+                onClick={() => {
+                  const res = refreshCustomerRepLinks();
+                  setSyncToast(`تم فحص ومزامنة العملاء بنجاح! تم تحديث وربط ${res.updatedCount} عميل بالمناديب.`);
+                  setTimeout(() => setSyncToast(null), 4000);
+                }}
+                className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold px-3.5 py-3 rounded-2xl text-xs shadow-xs transition active:scale-95 cursor-pointer border border-slate-300"
+                title="إعادة فحص وربط العملاء بالمناديب وفقاً للأسماء والفروع"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-slate-600" />
+                <span>مزامنة وربط العملاء بالمناديب</span>
+              </button>
+            )}
+
+            {isSuperAdminOrDev ? (
+              <button
+                onClick={handleOpenAddModal}
+                className="flex items-center justify-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black px-5 py-3 rounded-2xl text-xs sm:text-sm shadow-md transition transform active:scale-95 cursor-pointer"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>إضافة موظف جديد +</span>
+              </button>
+            ) : (
+              <div className="bg-amber-50 text-amber-800 border border-amber-200 px-3.5 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2">
+                <Lock className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>إضافة وتعديل الموظفين مقتصرة على الآدمن والمطور فقط</span>
+              </div>
+            )}
+          </div>
         </div>
+
+        {syncToast && (
+          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-950 rounded-2xl text-xs font-bold flex items-center gap-2 animate-in fade-in">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{syncToast}</span>
+          </div>
+        )}
       </div>
 
 
@@ -637,6 +682,14 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                   </div>
                   {user.role === 'sales_rep' && (
                     <div className="flex justify-between items-center">
+                      <span className="text-slate-400">العملاء المسندين:</span>
+                      <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2 py-0.5 rounded text-[10px]">
+                        👥 {customers.filter((c) => doesCustomerBelongToRep(c, user)).length} عميل
+                      </span>
+                    </div>
+                  )}
+                  {user.role === 'sales_rep' && (
+                    <div className="flex justify-between items-center">
                       <span className="text-slate-400">المشرف:</span>
                       <select
                         value={user.supervisorId || ''}
@@ -752,9 +805,16 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                       </span>
                     </td>
 
-                    {/* Branch */}
-                    <td className="p-3.5 font-bold text-slate-800">
-                      {user.branchName}
+                    {/* Branch & Assigned Customers */}
+                    <td className="p-3.5">
+                      <div className="font-bold text-slate-800">{user.branchName}</div>
+                      {user.role === 'sales_rep' && (
+                        <div className="mt-1">
+                          <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-850 border border-emerald-200 px-2 py-0.5 rounded-lg text-[10px] font-bold">
+                            👥 {customers.filter((c) => doesCustomerBelongToRep(c, user)).length} عميل مسند
+                          </span>
+                        </div>
+                      )}
                     </td>
 
                     {/* Supervisor Assignment Dropdown */}
@@ -1044,10 +1104,10 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                 </div>
               </div>
 
-              {/* 4. LIVE EMPLOYEE BADGE PREVIEW */}
-              <div className="pt-2 border-t border-slate-100">
-                <label className="block font-black text-slate-800 text-[11px] mb-2 text-slate-500">
-                  معاينة بطاقة الموظف المباشرة:
+              {/* 4. LIVE EMPLOYEE BADGE & MATCHED CUSTOMER PREVIEW */}
+              <div className="pt-2 border-t border-slate-100 space-y-2">
+                <label className="block font-black text-slate-800 text-[11px] text-slate-500">
+                  معاينة بطاقة الموظف والعملاء المرتبطين به:
                 </label>
                 <div className="bg-slate-900 text-white p-3.5 rounded-2xl border border-slate-800 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
@@ -1063,6 +1123,20 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                     {roleConfigs[formData.role || 'sales_rep']?.label}
                   </span>
                 </div>
+
+                {formData.role === 'sales_rep' && formData.name?.trim() && (
+                  <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl text-emerald-950 text-xs flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>
+                        قاعدة بيانات العملاء: تم رصد <strong>{matchingCustomerCount} عميل</strong> مسجل باسم ({formData.name}) في ({formData.branchName || 'الفرع'})
+                      </span>
+                    </div>
+                    <span className="bg-emerald-200 text-emerald-900 text-[10px] font-black px-2 py-0.5 rounded-md shrink-0">
+                      ربط تلقائي بالسيستم
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Modal Buttons */}

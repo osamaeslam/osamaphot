@@ -8,7 +8,7 @@ import { Customer, CustomerTier, Invoice, ItemStatus, Product, SalesPriority } f
  */
 export function normalizeExcelBranchName(rawBranch?: string): string {
   if (!rawBranch || !rawBranch.trim()) {
-    return 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)';
+    return '';
   }
   const clean = rawBranch.trim();
   const lower = clean.toLowerCase();
@@ -16,7 +16,6 @@ export function normalizeExcelBranchName(rawBranch?: string): string {
   if (
     lower.includes('أكتوبر') ||
     lower.includes('اكتوبر') ||
-    lower.includes('مركزي') ||
     lower.includes('مركزي') ||
     lower.includes('رئيسي') ||
     lower.includes('october') ||
@@ -61,7 +60,7 @@ export function normalizeExcelBranchName(rawBranch?: string): string {
 
 /**
  * Clean and extract raw Image URL from Google Sheets cells
- * Handles =IMAGE("..."), =HYPERLINK("...", "..."), quotes, and drive links
+ * Handles =IMAGE("..."), =HYPERLINK("...", "..."), Drive file sharing links, Google UserContent thumbnails, raw IDs with =w800, and standard web links.
  */
 export function cleanGoogleSheetImageUrl(raw: string): string {
   if (!raw) return '';
@@ -82,7 +81,32 @@ export function cleanGoogleSheetImageUrl(raw: string): string {
   // 3. Strip enclosing single or double quotes
   clean = clean.replace(/^["']+|["']+$/g, '').trim();
 
-  // 4. If someone has multiple space-separated or comma-separated URLs, take the first valid one
+  // 4. Drive sharing URLs: drive.google.com/file/d/{ID}/view -> Google Direct CDN Thumbnail
+  const driveFileMatch = clean.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+  if (driveFileMatch) {
+    return `https://lh3.googleusercontent.com/d/${driveFileMatch[1]}=w800`;
+  }
+
+  // 5. Drive open?id={ID} or uc?id={ID} or thumbnail?id={ID}
+  const driveIdMatch = clean.match(/[?&]id=([a-zA-Z0-9_-]+)/i);
+  if (driveIdMatch) {
+    return `https://lh3.googleusercontent.com/d/${driveIdMatch[1]}=w800`;
+  }
+
+  // 6. If raw already contains googleusercontent /d/{ID}
+  const lhMatch = clean.match(/googleusercontent\.com\/d\/([a-zA-Z0-9_-]+)/i);
+  if (lhMatch) {
+    return `https://lh3.googleusercontent.com/d/${lhMatch[1]}=w800`;
+  }
+
+  // 7. If raw is a naked Google ID (with or without leading slash or =w800 parameter)
+  // e.g. "m6Z0e9dq9HwKa_AkEBbVhO0=w800" or "/dMJZNZDpeeZC1UcU19OX0zcdQ=w800"
+  const nakedIdMatch = clean.match(/^(\/)?([a-zA-Z0-9_-]{20,})(=w\d+)?$/i);
+  if (nakedIdMatch) {
+    return `https://lh3.googleusercontent.com/d/${nakedIdMatch[2]}=w800`;
+  }
+
+  // 8. If someone has multiple space-separated or comma-separated URLs, take the first valid one
   if (clean.includes(' ') && (clean.startsWith('http://') || clean.startsWith('https://'))) {
     const parts = clean.split(/\s+/);
     if (parts[0] && parts[0].startsWith('http')) {
@@ -1083,7 +1107,7 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
         tier: tier,
         phone: rawPhone,
         address: rawAddress,
-        branchName: normalizeExcelBranchName(rawBranch || 'فرع القاهرة'),
+        branchName: normalizeExcelBranchName(rawBranch),
         repName: rawRep || '',
         salesRepName: rawRep || '',
         taxNumber: rawTax,
