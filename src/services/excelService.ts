@@ -695,21 +695,38 @@ export function exportInvoiceToExcel(invoice: Invoice): void {
 
   const fullSheetData = [...titleRows, tableHeaders, ...itemRows, ...summaryRows];
   const ws = XLSX.utils.aoa_to_sheet(fullSheetData);
+  const lastColumn = tableHeaders.length - 1;
+  const lastRow = fullSheetData.length - 1;
+
+  // Professional, editable invoice layout: merged title, clear sections, RTL-friendly alignment.
+  ws['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: lastColumn } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: lastColumn } },
+  ];
+  ws['!freeze'] = { xSplit: 0, ySplit: titleRows.length + 1 };
+  ws['!autofilter'] = { ref: `A${titleRows.length + 1}:M${titleRows.length + 1 + itemRows.length}` };
+  ws['!sheetView'] = [{ rightToLeft: true }];
+  ws['!rows'] = fullSheetData.map((_, rowIndex) => ({
+    hpt: rowIndex === 0 ? 30 : rowIndex === 1 ? 22 : rowIndex === titleRows.length ? 28 : 20,
+  }));
+
+  const applyRangeStyle = (range: string, style: Record<string, unknown>) => {
+    const decoded = XLSX.utils.decode_range(range);
+    for (let row = decoded.s.r; row <= decoded.e.r; row += 1) {
+      for (let col = decoded.s.c; col <= decoded.e.c; col += 1) {
+        const cell = ws[XLSX.utils.encode_cell({ r: row, c: col })];
+        if (cell) cell.s = { ...(cell.s || {}), ...style };
+      }
+    }
+  };
+  applyRangeStyle(`A1:M2`, { font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 15 }, fill: { fgColor: { rgb: '0F172A' } }, alignment: { horizontal: 'center', vertical: 'center' } });
+  applyRangeStyle(`A${titleRows.length + 1}:M${titleRows.length + 1}`, { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: 'D97706' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: { top: { style: 'thin', color: { rgb: '94A3B8' } }, bottom: { style: 'thin', color: { rgb: '94A3B8' } } } });
+  applyRangeStyle(`A${titleRows.length + 2}:M${titleRows.length + 1 + itemRows.length}`, { alignment: { vertical: 'center', wrapText: true }, border: { top: { style: 'thin', color: { rgb: 'CBD5E1' } }, bottom: { style: 'thin', color: { rgb: 'CBD5E1' } }, left: { style: 'thin', color: { rgb: 'CBD5E1' } }, right: { style: 'thin', color: { rgb: 'CBD5E1' } } } });
+  applyRangeStyle(`J${titleRows.length + 2}:M${lastRow + 1}`, { alignment: { horizontal: 'right', vertical: 'center', wrapText: true } });
 
   ws['!cols'] = [
-    { wch: 6 },
-    { wch: 14 },
-    { wch: 38 },
-    { wch: 14 },
-    { wch: 22 },
-    { wch: 14 },
-    { wch: 12 },
-    { wch: 14 },
-    { wch: 16 },
-    { wch: 16 },
-    { wch: 18 },
-    { wch: 14 },
-    { wch: 18 }
+    { wch: 6 }, { wch: 14 }, { wch: 38 }, { wch: 14 }, { wch: 22 }, { wch: 14 },
+    { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 14 }, { wch: 18 }
   ];
 
   XLSX.utils.book_append_sheet(wb, ws, `فاتورة_${invoice.invoiceNumber}`);
