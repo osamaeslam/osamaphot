@@ -124,9 +124,16 @@ export const InventoryStockView: React.FC = () => {
 
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
-      // Branch managers, supervisors, and reps never see another branch's stock.
-      if (visibleBranch !== 'الكل' && visibleBranch && p.branchName && p.branchName !== visibleBranch) {
-        if (p.mainWarehouseActual <= 0 && p.branchStockActual <= 0) return false;
+  // Operating-branch stock is scoped to the user's branch. October's central
+      // warehouse balance remains visible to everyone for availability and booking.
+      if (
+        visibleBranch !== 'الكل' &&
+        visibleBranch &&
+        p.branchName &&
+        p.branchName !== visibleBranch &&
+        p.mainWarehouseActual <= 0
+      ) {
+        return false;
       }
 
       if (searchTerm.trim()) {
@@ -399,11 +406,11 @@ export const InventoryStockView: React.FC = () => {
             </span>
           </div>
           <div className="mt-2">
-            <div className="text-[11px] text-slate-500 font-bold">يحتاج تحويل من أكتوبر</div>
+            <div className="text-[11px] text-slate-500 font-bold">يحتاج تحويل من أكتو��ر</div>
             <div className="text-xl sm:text-2xl font-black text-blue-950">
               {stockMetrics.needsTransferCount} <span className="text-xs font-bold text-slate-500">صنف</span>
             </div>
-            <div className="text-[10px] text-blue-800 font-semibold mt-0.5">عجز بالفرع ومتوفر بالمخزن الرئيسي</div>
+            <div className="text-[10px] text-blue-800 font-semibold mt-0.5">عجز بالفرع ومتوفر بالمخزن ال��ئيسي</div>
           </div>
         </div>
 
@@ -516,12 +523,23 @@ export const InventoryStockView: React.FC = () => {
           <div className="bg-white rounded-3xl p-4 sm:p-5 shadow-sm border border-slate-200 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg sm:text-xl font-black text-slate-900 flex items-center gap-2">
+                <h2 className="text-lg sm:text-xl font-black text-slate-900 flex items-center gap-2 flex-wrap">
                   <span>إدارة المخزون والتوافر بالفرع والمخزن الرئيسي</span>
                   <span className="bg-amber-100 text-amber-900 text-xs px-2.5 py-0.5 rounded-full font-bold">
                     {filteredProducts.length} صنف
                   </span>
                 </h2>
+                <div className="flex flex-wrap items-center gap-2 mt-2 text-[11px] font-bold">
+                  <span className="bg-slate-100 text-slate-700 border border-slate-200 rounded-full px-2.5 py-1">
+                    فرعك: {currentUser?.branchName || 'غير محدد'}
+                  </span>
+                  <span className="bg-blue-50 text-blue-800 border border-blue-200 rounded-full px-2.5 py-1">
+                    مخزون الفرع ظاهر حسب الصلاحية
+                  </span>
+                  <span className="bg-amber-50 text-amber-800 border border-amber-200 rounded-full px-2.5 py-1">
+                    مخزن أكتوبر الرئيسي ظاهر للجميع للحجز عند الاعتماد
+                  </span>
+                </div>
                 <p className="text-xs text-slate-500 mt-0.5">
                   إذا كان المنتج متوفراً بالفرع يصرف مباشرة بدون تحويل، وفي حال عدم توفره بالفرع يتم تقديم طلب تحويل فوري من فرع أكتوبر.
                 </p>
@@ -1270,7 +1288,7 @@ export const InventoryStockView: React.FC = () => {
               </p>
             </div>
             <span className="bg-slate-100 text-slate-800 font-bold px-3 py-1 rounded-xl text-xs border border-slate-200">
-              {inventoryLogs.length} حركة مسجلة
+              {inventoryLogs.length} حركة ��سجلة
             </span>
           </div>
 
@@ -1562,7 +1580,7 @@ export const InventoryStockView: React.FC = () => {
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-black text-sm text-rose-700 flex items-center gap-2">
                 <XCircle className="w-4 h-4" />
-                <span>رفض الطلبية وإرجاع الرصيد المحجوز للمخ��ن</span>
+                <span>رفض الطلبية وإرجاع الر��يد المحجوز للمخ��ن</span>
               </h3>
               <button onClick={() => setRejectModalInvoiceId(null)}>
                 <X className="w-4 h-4 text-slate-400 hover:text-slate-700" />

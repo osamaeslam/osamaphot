@@ -548,7 +548,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                   onChange={(e) => setSelectedBranchFilter(e.target.value)}
                   className="bg-transparent font-black text-slate-800 focus:outline-none cursor-pointer"
                 >
-                  <option value="الكل">جميع الفروع ({branches.length})</option>
+                  <option value="الكل">الفروع التشغيلية (7)</option>
                   {branches.map((b) => (
                     <option key={b.id} value={b.name}>{b.name}</option>
                   ))}
