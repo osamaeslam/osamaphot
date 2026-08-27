@@ -876,16 +876,13 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
   const errors: string[] = [];
   const customers: Customer[] = [];
 
+  // Customer sheet intentionally supports only the four ownership columns.
+  // Extra columns are ignored so customer visibility cannot depend on contact details.
   const colMap: Record<string, number> = {
     code: -1,
     name: -1,
-    tier: -1,
-    phone: -1,
-    address: -1,
     branchName: -1,
     repName: -1,
-    taxNumber: -1,
-    notes: -1,
   };
 
   headers.forEach((h, idx) => {
@@ -904,9 +901,10 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
       norm.includes('عميل') ||
       norm.includes('محل') ||
       norm.includes('تاجر') ||
-      norm.includes('customer') ||
+      (norm.includes('customer') ||
       norm.includes('client') ||
-      norm.includes('name')
+      norm.includes('name')) &&
+      !norm.includes('مندوب') && !norm.includes('مسؤول') && !norm.includes('rep')
     ) {
       if (colMap.name === -1) colMap.name = idx;
     } else if (
@@ -1294,26 +1292,13 @@ export function generateSampleCustomersTemplate(): void {
 export function exportCustomersToExcel(customers: Customer[]): void {
   const wb = XLSX.utils.book_new();
 
-  const headers = [
-    'كود العميل',
-    'اسم العميل / المحل',
-    'رقم الهاتف',
-    'العنوان / المنطقة',
-    'الفرع التابع له',
-    'المندوب المسئول',
-    'الرقم الضريبي',
-    'ملاحظات'
-  ];
+  const headers = ['كود العميل', 'اسم العميل', 'الفرع التابع له', 'اسم المندوب'];
 
   const rows = customers.map(c => [
     c.code,
     c.name,
-    c.phone,
-    c.address,
     c.branchName,
-    c.repName,
-    c.taxNumber || '',
-    c.notes || ''
+    c.repName || c.salesRepName || ''
   ]);
 
   const data = [headers, ...rows];

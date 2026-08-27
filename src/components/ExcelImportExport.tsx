@@ -1175,11 +1175,8 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                       <th className="p-3">#</th>
                       <th className="p-3">كود العميل</th>
                       <th className="p-3">اسم العميل</th>
-                      <th className="p-3">اسم المحل / السوبر ماركت</th>
-                      <th className="p-3">رقم الهاتف</th>
-                      <th className="p-3">الفرع</th>
-                      <th className="p-3">المحافظة / العنوان</th>
-                      <th className="p-3">الرقم الضريبي</th>
+                      <th className="p-3">الفرع التابع له</th>
+                      <th className="p-3">اسم المندوب</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-semibold text-slate-800">
@@ -1188,11 +1185,8 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                         <td className="p-3 text-slate-400">{i + 1}</td>
                         <td className="p-3 font-mono font-bold text-amber-800">{c.code}</td>
                         <td className="p-3 font-bold text-slate-950">{c.name}</td>
-                        <td className="p-3">{c.storeName || '---'}</td>
-                        <td className="p-3">{c.phone || '---'}</td>
                         <td className="p-3">{c.branchName || 'الفرع الرئيسي'}</td>
-                        <td className="p-3">{c.address || c.governorate || '---'}</td>
-                        <td className="p-3">{c.taxNumber || '---'}</td>
+                        <td className="p-3 font-bold text-emerald-700">{c.repName || c.salesRepName || 'غير مرتبط'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1246,6 +1240,7 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                       <th className="p-3">اسم المحل / المعرض</th>
                       <th className="p-3">رقم الهاتف</th>
                       <th className="p-3">الفرع التابع له</th>
+                      <th className="p-3">اسم المندوب</th>
                       <th className="p-3">العنوان والمحافظة</th>
                       <th className="p-3">الرقم الضريبي</th>
                       <th className="p-3 text-center">إجراءات</th>
@@ -1277,6 +1272,7 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                               <td className="p-3 font-bold text-slate-700">{c.storeName || '---'}</td>
                               <td className="p-3 font-bold text-emerald-800">{c.phone || '---'}</td>
                               <td className="p-3 text-slate-600">{c.branchName || 'الفرع الرئيسي'}</td>
+                              <td className="p-3 font-bold text-emerald-700">{c.repName || c.salesRepName || 'غير مرتبط'}</td>
                               <td className="p-3 text-slate-600">{c.address || c.governorate || '---'}</td>
                               <td className="p-3 font-mono text-slate-500">{c.taxNumber || '---'}</td>
                               <td className="p-3 text-center">
@@ -1330,7 +1326,10 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
 
         <div className="flex flex-wrap gap-1.5 text-[11px]">
           {[
-            'الكود',
+            'كود العميل',
+            'اسم العميل',
+            'الفرع التابع له',
+            'اسم المندوب',
             'اسم الصنف',
             'اولوية البيع',
             'التصنيف',

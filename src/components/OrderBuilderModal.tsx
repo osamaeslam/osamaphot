@@ -45,6 +45,7 @@ export const OrderBuilderModal: React.FC<OrderBuilderModalProps> = ({
     cart,
     products,
     customers,
+    getVisibleCustomers,
     updateCartItem,
     removeFromCart,
     clearCart,
@@ -104,13 +105,15 @@ export const OrderBuilderModal: React.FC<OrderBuilderModalProps> = ({
     );
   };
 
+  const visibleCustomers = useMemo(() => getVisibleCustomers(), [getVisibleCustomers, customers, currentUser]);
+
   const myAssignedCustomersCount = useMemo(() => {
-    return customers.filter(isCustomerBelongingToCurrentRep).length;
-  }, [customers, currentUser]);
+    return visibleCustomers.filter(isCustomerBelongingToCurrentRep).length;
+  }, [visibleCustomers, currentUser]);
 
   // Filtered customers for search dropdown by search query, rep assignment scope, and tier
   const filteredCustomers = useMemo(() => {
-    return customers.filter((c) => {
+    return visibleCustomers.filter((c) => {
       // Rep scope filter (for sales reps)
       if (customerRepScope === 'my_customers' && currentUser?.role === 'sales_rep') {
         if (!isCustomerBelongingToCurrentRep(c)) return false;
@@ -645,7 +648,7 @@ export const OrderBuilderModal: React.FC<OrderBuilderModalProps> = ({
                     </span>
                     <span className="font-bold text-emerald-950">
                       {customerName.trim()
-                        ? `سيتم حفظ وتوثيق العميل (${customerName}) وإسناده تلقائياً للمندوب (${customerRep || currentUser?.name || 'المندوب الحالي'}).`
+                        ? `سيتم حفظ وتوثيق العميل (${customerName}) وإسناده تلقا��ياً للمندوب (${customerRep || currentUser?.name || 'المندوب الحالي'}).`
                         : `أدخل بيانات العميل الجديد أدناه وسيتم تسجيله وربطه بحساب المندوب تلقائياً فور حفظ الفاتورة.`}
                     </span>
                   </div>
