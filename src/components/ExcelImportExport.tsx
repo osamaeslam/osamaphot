@@ -54,10 +54,15 @@ export const ExcelImportExport: React.FC = () => {
   const {
     products,
     customers,
+    users,
+    currentUser,
+    branches,
     importProductsList,
     importCustomersList,
     cleanAndDeduplicateCustomers,
+    updateCustomer,
     deleteCustomer,
+    refreshCustomerRepLinks,
     wipeAllProductsAndData,
     selectedBranchFilter
   } = useApp();
@@ -71,6 +76,8 @@ export const ExcelImportExport: React.FC = () => {
   const [customerSheetError, setCustomerSheetError] = useState<string | null>(null);
   const [customerPreviewList, setCustomerPreviewList] = useState<Customer[]>([]);
   const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+  const [customerSelectedRepFilter, setCustomerSelectedRepFilter] = useState<string>('all');
+  const [customerSelectedBranchFilter, setCustomerSelectedBranchFilter] = useState<string>('all');
   const [customerImportMode, setCustomerImportMode] = useState<'merge' | 'replace'>('merge');
   const [customerDisplayLimit, setCustomerDisplayLimit] = useState<number>(50);
 
@@ -404,7 +411,7 @@ function onEdit(e) {
                 <div className="w-7 h-7 rounded-full bg-emerald-500 text-slate-950 font-black flex items-center justify-center text-xs mb-2">1</div>
                 <h4 className="font-black text-sm text-white mb-1">افتح شيت جوجل شيت</h4>
                 <p className="text-xs text-slate-400">
-                  أنشئ جدولك على Google Sheets بنفس الأعمدة (الكود، اسم الصنف، السعر، المخزون، القسم).
+                  أنشئ جدولك على Google Sheets بالأعمدة الرئيسية المعتمدة لمجموعة دريم.
                 </p>
               </div>
 
@@ -422,6 +429,90 @@ function onEdit(e) {
                 <p className="text-xs text-slate-400">
                   الصق الرابط هنا واضغط "جلب وتحديث"، سيتم تحديث كامل فروع ومناديب دريم فوراً!
                 </p>
+              </div>
+            </div>
+
+            {/* Official Columns Reference Table (Matching exact User Google Sheet Screenshot) */}
+            <div className="bg-slate-950/80 rounded-2xl p-4 sm:p-5 border border-emerald-500/30 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                  <h4 className="text-xs sm:text-sm font-black text-white">
+                    الأعمدة الرئيسية المعتمدة في الشيت (مطابقة 100% لجدولك):
+                  </h4>
+                </div>
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded-md border border-emerald-500/30">
+                  محدث وفقاً للشيت الرسمي
+                </span>
+              </div>
+
+              <div className="overflow-x-auto text-[11px]">
+                <table className="w-full text-right border-collapse">
+                  <thead>
+                    <tr className="bg-slate-800 text-slate-200 border-b border-slate-700 font-bold">
+                      <th className="p-2 whitespace-nowrap">اسم العمود بالشيت</th>
+                      <th className="p-2 whitespace-nowrap">البيان والوظيفة في النظام</th>
+                      <th className="p-2 whitespace-nowrap text-left">مثال توضيحي</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800 text-slate-300">
+                    <tr>
+                      <td className="p-2 font-mono font-black text-amber-300">كود موحد / كود المنتج</td>
+                      <td className="p-2">الكود الفريد للصنف في الكتالوج والفواتير</td>
+                      <td className="p-2 text-left font-mono text-slate-400">1000061</td>
+                    </tr>
+                    <tr>
+                      <td className="p-2 font-black text-white">اسم المنتج / البيان</td>
+                      <td className="p-2">الاسم الكامل للصنف في الكتالوج وفواتير البيع</td>
+                      <td className="p-2 text-left text-slate-400">بمبونيرة 15010 جليز الوان</td>
+                    </tr>
+                    <tr>
+                      <td className="p-2 font-black text-slate-200">الحجم / الوزن</td>
+                      <td className="p-2">مقاس وحجم الصنف (اختياري)</td>
+                      <td className="p-2 text-left text-slate-400">كبير / 24 سم</td>
+                    </tr>
+                    <tr>
+                      <td className="p-2 font-black text-amber-400">عدد القطع (Factor)</td>
+                      <td className="p-2">شدة الكرتونة (عدد القطع الفردية داخل الكرتونة)</td>
+                      <td className="p-2 text-left font-mono text-amber-300">6</td>
+                    </tr>
+                    <tr>
+                      <td className="p-2 font-black text-emerald-400">سعر الكرتونة</td>
+                      <td className="p-2">سعر البيع الإجمالي للكرتونة بالجملة</td>
+                      <td className="p-2 text-left font-mono text-emerald-300">350 ج.م</td>
+                    </tr>
+                    <tr>
+                      <td className="p-2 font-black text-cyan-300">Item group</td>
+                      <td className="p-2">المجموعة الرئيسية / القسم للفلترة والتصنيف</td>
+                      <td className="p-2 text-left font-mono text-cyan-200">LHLotus / Philips</td>
+                    </tr>
+                    <tr>
+                      <td className="p-2 font-black text-purple-300">Family Name</td>
+                      <td className="p-2">اسم العائلة / التصنيف الفرعي</td>
+                      <td className="p-2 text-left text-purple-200">بمبونيرة / مجات</td>
+                    </tr>
+                    <tr>
+                      <td className="p-2 font-black text-slate-200">اللون</td>
+                      <td className="p-2">لون الصنف المتاح</td>
+                      <td className="p-2 text-left text-slate-400">ألوان مشكلة / أبيض</td>
+                    </tr>
+                    <tr>
+                      <td className="p-2 font-black text-blue-400">الفروع الـ 7 + مخزن أكتوبر</td>
+                      <td className="p-2">أعمدة الأرصدة (البحيرة، الفيوم، القاهرة، المنيا، ديمشلت، مخزون اكتوبر، منوف، منيا القمح)</td>
+                      <td className="p-2 text-left font-mono text-blue-300">أرقام عدد الكراتين</td>
+                    </tr>
+                    <tr>
+                      <td className="p-2 font-black text-rose-400">سعر العرض</td>
+                      <td className="p-2">سعر الخصم/العرض الترويجي للكرتونة (إذا وجد)</td>
+                      <td className="p-2 text-left font-mono text-rose-300">320 ج.م</td>
+                    </tr>
+                    <tr>
+                      <td className="p-2 font-black text-sky-400">لينك الصوره</td>
+                      <td className="p-2">رابط صورة المنتج المباشر من Google Drive أو CDN</td>
+                      <td className="p-2 text-left font-mono text-[10px] text-sky-300 truncate max-w-xs">googleusercontent.com/d/...</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
@@ -965,6 +1056,18 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                 <button
                   type="button"
                   onClick={() => {
+                    const res = refreshCustomerRepLinks();
+                    setCustomerSheetSuccess(`تمت إعادة فحص وتحديث مطابقة المناديب والفروع لجميع العملاء (${res.updatedCount} عميل تم تحديث ارتباطهم بالمناديب).`);
+                  }}
+                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-black px-4 py-2.5 rounded-xl transition shadow-sm flex items-center gap-2 cursor-pointer"
+                  title="إعادة ربط العملاء بحسابات المناديب الحالية والفروع"
+                >
+                  <RefreshCw className="w-4 h-4 text-white" />
+                  <span>ربط العملاء بالمناديب ({users.filter(u => u.role === 'sales_rep').length} مندوب)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     const res = cleanAndDeduplicateCustomers();
                     if (res.duplicatesRemoved > 0) {
                       setCustomerSheetSuccess(`تم فحص وتنظيف قاعدة العملاء بنجاح! تم دمج وإزالة ${res.duplicatesRemoved} سجل مكرر، واستقرار السجل عند ${res.deduplicatedCount} عميل فريد.`);
@@ -1197,7 +1300,7 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
 
           {/* Current Saved Customers Table */}
           <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center font-black">
                   <Users className="w-5 h-5" />
@@ -1212,16 +1315,61 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                 </div>
               </div>
 
-              {/* Search Bar for current customers */}
-              <div className="relative w-full sm:w-72">
-                <input
-                  type="text"
-                  value={customerSearchTerm}
-                  onChange={(e) => setCustomerSearchTerm(e.target.value)}
-                  placeholder="بحث بالاسم، الكود، الهاتف، المحل..."
-                  className="w-full h-10 pr-9 pl-4 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 font-bold"
-                />
-                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
+              {/* Filters Bar: Rep Filter, Branch Filter, and Search */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Rep Filter Dropdown */}
+                <select
+                  value={customerSelectedRepFilter}
+                  onChange={(e) => setCustomerSelectedRepFilter(e.target.value)}
+                  aria-label="تصفية حسب المندوب المسؤول"
+                  className="h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value="all">جميع المناديب ({customers.length} عميل)</option>
+                  {users
+                    .filter((u) => u.role === 'sales_rep' || u.role === 'supervisor')
+                    .map((rep) => {
+                      const repCustomerCount = customers.filter(
+                        (c) =>
+                          c.repId === rep.id ||
+                          c.salesRepName === rep.name ||
+                          c.repName === rep.name ||
+                          (c.salesRepName && c.salesRepName.includes(rep.name))
+                      ).length;
+                      return (
+                        <option key={rep.id} value={rep.name}>
+                          مندوب: {rep.name} {rep.branchName ? `(${rep.branchName})` : ''} - [{repCustomerCount} عميل]
+                        </option>
+                      );
+                    })}
+                  <option value="unassigned">عملاء غير مسندين لمندوب</option>
+                </select>
+
+                {/* Branch Filter Dropdown */}
+                <select
+                  value={customerSelectedBranchFilter}
+                  onChange={(e) => setCustomerSelectedBranchFilter(e.target.value)}
+                  aria-label="تصفية حسب الفرع"
+                  className="h-10 px-3 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value="all">جميع الفروع</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.name}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Search Bar */}
+                <div className="relative w-full sm:w-60">
+                  <input
+                    type="text"
+                    value={customerSearchTerm}
+                    onChange={(e) => setCustomerSearchTerm(e.target.value)}
+                    placeholder="بحث بالاسم، الكود، الهاتف، المحل..."
+                    className="w-full h-10 pr-9 pl-4 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 font-bold"
+                  />
+                  <Search className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
+                </div>
               </div>
             </div>
 
@@ -1240,7 +1388,7 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                       <th className="p-3">اسم المحل / المعرض</th>
                       <th className="p-3">رقم الهاتف</th>
                       <th className="p-3">الفرع التابع له</th>
-                      <th className="p-3">اسم المندوب</th>
+                      <th className="p-3">المندوب المسؤول</th>
                       <th className="p-3">العنوان والمحافظة</th>
                       <th className="p-3">الرقم الضريبي</th>
                       <th className="p-3 text-center">إجراءات</th>
@@ -1249,6 +1397,28 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                   <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                     {(() => {
                       const filtered = customers.filter((c) => {
+                        // Rep Filter
+                        if (customerSelectedRepFilter !== 'all') {
+                          if (customerSelectedRepFilter === 'unassigned') {
+                            if (c.repId || c.salesRepName || c.repName) return false;
+                          } else {
+                            const repMatch =
+                              c.repName === customerSelectedRepFilter ||
+                              c.salesRepName === customerSelectedRepFilter ||
+                              (c.salesRepName && c.salesRepName.includes(customerSelectedRepFilter)) ||
+                              (c.repName && c.repName.includes(customerSelectedRepFilter));
+                            if (!repMatch) return false;
+                          }
+                        }
+
+                        // Branch Filter
+                        if (customerSelectedBranchFilter !== 'all') {
+                          if (c.branchName && !c.branchName.includes(customerSelectedBranchFilter) && !customerSelectedBranchFilter.includes(c.branchName)) {
+                            return false;
+                          }
+                        }
+
+                        // Search Term
                         if (!customerSearchTerm.trim()) return true;
                         const q = customerSearchTerm.toLowerCase().trim();
                         return (
@@ -1257,7 +1427,9 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                           (c.phone && c.phone.includes(q)) ||
                           (c.storeName && c.storeName.toLowerCase().includes(q)) ||
                           (c.governorate && c.governorate.toLowerCase().includes(q)) ||
-                          (c.branchName && c.branchName.toLowerCase().includes(q))
+                          (c.branchName && c.branchName.toLowerCase().includes(q)) ||
+                          (c.salesRepName && c.salesRepName.toLowerCase().includes(q)) ||
+                          (c.repName && c.repName.toLowerCase().includes(q))
                         );
                       });
                       const displayed = filtered.slice(0, customerDisplayLimit);
@@ -1271,8 +1443,39 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                               <td className="p-3 font-black text-slate-900">{c.name}</td>
                               <td className="p-3 font-bold text-slate-700">{c.storeName || '---'}</td>
                               <td className="p-3 font-bold text-emerald-800">{c.phone || '---'}</td>
-                              <td className="p-3 text-slate-600">{c.branchName || 'الفرع الرئيسي'}</td>
-                              <td className="p-3 font-bold text-emerald-700">{c.repName || c.salesRepName || 'غير مرتبط'}</td>
+                              <td className="p-3 text-slate-600">
+                                <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-bold text-[11px]">
+                                  {c.branchName || 'الفرع الرئيسي'}
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                {/* Inline Rep Selector */}
+                                <select
+                                  value={c.salesRepName || c.repName || ''}
+                                  onChange={(e) => {
+                                    const selectedRepName = e.target.value;
+                                    const matchedUser = users.find((u) => u.name === selectedRepName);
+                                    updateCustomer({
+                                      ...c,
+                                      salesRepName: selectedRepName || undefined,
+                                      repName: selectedRepName || undefined,
+                                      repId: matchedUser ? matchedUser.id : undefined,
+                                      branchName: c.branchName || matchedUser?.branchName || undefined,
+                                    });
+                                  }}
+                                  aria-label={`تحديد مندوب العميل ${c.name}`}
+                                  className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                >
+                                  <option value="">-- غير محدد --</option>
+                                  {users
+                                    .filter((u) => u.role === 'sales_rep' || u.role === 'supervisor')
+                                    .map((u) => (
+                                      <option key={u.id} value={u.name}>
+                                        {u.name} {u.branchName ? `(${u.branchName})` : ''}
+                                      </option>
+                                    ))}
+                                </select>
+                              </td>
                               <td className="p-3 text-slate-600">{c.address || c.governorate || '---'}</td>
                               <td className="p-3 font-mono text-slate-500">{c.taxNumber || '---'}</td>
                               <td className="p-3 text-center">
@@ -1293,7 +1496,7 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                           ))}
                           {filtered.length > customerDisplayLimit && (
                             <tr>
-                              <td colSpan={9} className="p-4 text-center bg-slate-50">
+                              <td colSpan={10} className="p-4 text-center bg-slate-50">
                                 <button
                                   type="button"
                                   onClick={() => setCustomerDisplayLimit((prev) => prev + 100)}

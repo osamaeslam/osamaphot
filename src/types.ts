@@ -80,6 +80,8 @@ export interface Product {
   classification: string;            // الفئة / Family Name
   familyName?: string;               // العائلة (Family Name)
   promoPrice?: number;               // سعر العرض للكرتونة (اختياري)
+  promoPiecePrice?: number;          // سعر العرض للقطعة الفردية (يُحسب تلقائياً = promoPrice / cartonQuantity)
+  offerPrice?: number;               // مرادف سعر العرض
   piecePrice?: number;               // سعر القطعة (Sales Price)
   salesPrice?: number;               // سعر القطعة (Sales Price)
   cartonPrice: number;               // سعر الكرتونة (Factor * Sales Price)

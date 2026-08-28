@@ -18,6 +18,7 @@ import {
   isBranchMatch,
   normalizeArabicText,
   getBranchStockForProduct,
+  inferBranchFromText,
 } from '../services/arabicMatchingService';
 import {
   deleteUserFromSupabase,
@@ -190,45 +191,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const normalizeBranchName = (name?: string): string => {
     if (!name || !name.trim()) return 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)';
     const clean = name.trim();
-    const lower = clean.toLowerCase();
-    if (
-      lower.includes('أكتوبر') ||
-      lower.includes('اكتوبر') ||
-      lower.includes('المركزي') ||
-      lower.includes('مركزي') ||
-      lower.includes('رئيسي') ||
-      lower.includes('october') ||
-      lower.includes('main')
-    ) {
-      return 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)';
-    }
-    if (
-      lower.includes('بحيرة') ||
-      lower.includes('بحيره') ||
-      lower.includes('دمنهور') ||
-      lower.includes('beheira') ||
-      lower.includes('damanhour')
-    ) {
-      return 'فرع البحيرة';
-    }
-    if (lower.includes('قاهرة') || lower.includes('قاهره') || lower.includes('cairo')) {
-      return 'فرع القاهرة';
-    }
-    if (lower.includes('فيوم') || lower.includes('fayoum')) {
-      return 'فرع الفيوم';
-    }
-    if (lower.includes('منيا القمح') || lower.includes('القمح') || lower.includes('meq')) {
-      return 'فرع منيا القمح';
-    }
-    if (lower.includes('منيا') || lower.includes('minya')) {
-      return 'فرع المنيا';
-    }
-    if (lower.includes('ديمشلت') || lower.includes('dimeshalt')) {
-      return 'فرع ديمشلت';
-    }
-    if (lower.includes('منوف') || lower.includes('menouf')) {
-      return 'فرع منوف';
-    }
+    const inferred = inferBranchFromText(clean);
+    if (inferred) return inferred;
     if (!clean.startsWith('فرع') && !clean.includes('المخزن')) {
       return `فرع ${clean}`;
     }
@@ -328,6 +292,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         key = `id:::${c.id || Math.random()}`;
       }
 
+      // Check if location or name contains clear district keywords (e.g. بني مزار -> فرع المنيا)
+      const locInferred = inferBranchFromText(
+        `${c.address || ''} ${c.governorate || ''} ${c.name || ''} ${c.notes || ''} ${c.branchName || ''}`
+      );
+      const resolvedBranch = locInferred || normalizeBranchName(c.branchName || 'الفرع الرئيسي');
+
       const existing = map.get(key);
       if (existing) {
         // Merge attributes to keep the best data
@@ -335,6 +305,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!existing.address && c.address) existing.address = c.address;
         if (!existing.taxNumber && c.taxNumber) existing.taxNumber = c.taxNumber;
         if (!existing.notes && c.notes) existing.notes = c.notes;
+        if (locInferred) existing.branchName = locInferred;
         if (c.repName && (!existing.repName || existing.repName === 'مندوب المبيعات')) existing.repName = c.repName;
         if (c.tier === 'مميز' || (c.tier === 'راقي' && existing.tier === 'متوسط')) {
           existing.tier = c.tier;
@@ -343,7 +314,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         map.set(key, {
           ...c,
           name: c.name || `عميل ${c.code || ''}`,
-          branchName: normalizeBranchName(c.branchName || 'الفرع الرئيسي'),
+          branchName: resolvedBranch,
         });
       }
     }
@@ -815,7 +786,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  // Auto-link customer rep names to actual user accounts with STRICT branch isolation & Arabic matching
+  // Auto-link customer rep names to actual user accounts with robust branch matching & Arabic heuristics
   const linkCustomersToUsers = (list: Customer[], userList: User[]): Customer[] => {
     if (!userList || userList.length === 0) return list;
 
@@ -824,35 +795,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return list.map((c) => {
       let updated = { ...c };
 
-      // 1. If customer has an existing repId, verify that the assigned rep's branch matches the customer's branch!
-      if (updated.repId && updated.branchName) {
-        const currentLinkedUser = userList.find((u) => u.id === updated.repId);
-        if (
-          currentLinkedUser?.branchName &&
-          !isBranchMatch(updated.branchName, currentLinkedUser.branchName, { allowUnassigned: false })
-        ) {
-          // Cross-branch contamination detected! Unlink this invalid repId.
-          updated = { ...updated, repId: undefined };
-        }
+      // Ensure branch is properly determined from location / address / name if available
+      const locInferred = inferBranchFromText(
+        `${updated.address || ''} ${updated.governorate || ''} ${updated.name || ''} ${updated.notes || ''}`
+      );
+      if (locInferred) {
+        updated.branchName = locInferred;
+      } else if (updated.branchName) {
+        updated.branchName = normalizeBranchName(updated.branchName);
       }
 
       const rawRep = (updated.salesRepName || updated.repName || '').trim();
-      if (!rawRep || rawRep === 'مندوب المبيعات' || rawRep === 'المندوب') {
+      if ((!rawRep || rawRep === 'مندوب المبيعات' || rawRep === 'المندوب') && !updated.repId) {
         return updated;
       }
 
-      // 2. Filter candidates strictly to reps in the SAME branch if customer has a branch
-      const branchCompatibleReps = updated.branchName
-        ? reps.filter((u) => !u.branchName || isBranchMatch(updated.branchName, u.branchName, { allowUnassigned: false }))
-        : reps;
+      // Check if candidate matches rep in same branch, or overall
+      const matchFn = (u: User) =>
+        (updated.repId && u.id === updated.repId) ||
+        isArabicNameMatch(rawRep, u.name) ||
+        (u.username && isArabicNameMatch(rawRep, u.username)) ||
+        (u.phone && (rawRep.includes(u.phone) || u.phone.includes(rawRep))) ||
+        normalizeArabicText(rawRep).includes(normalizeArabicText(u.name)) ||
+        normalizeArabicText(u.name).includes(normalizeArabicText(rawRep));
 
-      // 3. Find matched rep strictly in that branch
-      const matched = branchCompatibleReps.find(
-        (u) =>
-          isArabicNameMatch(rawRep, u.name) ||
-          (u.username && isArabicNameMatch(rawRep, u.username)) ||
-          (u.phone && rawRep.includes(u.phone))
-      );
+      const branchCompatibleReps = updated.branchName
+        ? reps.filter((u) => u.branchName && isBranchMatch(updated.branchName, u.branchName, { allowUnassigned: false }))
+        : [];
+
+      let matched = branchCompatibleReps.find(matchFn);
+      if (!matched) {
+        matched = reps.find(matchFn);
+      }
 
       if (matched) {
         return {
@@ -860,7 +834,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           repName: matched.name,
           repId: matched.id,
           salesRepName: matched.name,
-          branchName: updated.branchName || matched.branchName,
+          branchName: matched.branchName || updated.branchName || 'الفرع الرئيسي',
         };
       }
       return updated;

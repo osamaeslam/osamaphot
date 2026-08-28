@@ -88,7 +88,7 @@ export const UserManager: React.FC = () => {
       text: 'text-rose-800',
       activeRing: 'ring-rose-500 border-rose-500 bg-rose-50/50',
       icon: ShieldAlert,
-      desc: 'صلاحيات الإدارة والرقابة الشاملة: إدارة الموظفين، اعتماد الحسابات، مراجعة فروع الشركة والمخازن، ورفع كشوفات الإكسل.'
+      desc: 'صلاحيات الإدارة والرقابة الشاملة الكاملة: حذف وتعديل أي فواتير نهائياً، تعديل وحذف الأصناف والعملاء، إدارة الموظفين، والتحكم بالفروع والمخازن.'
     },
     developer: {
       label: 'المطور (الدعم التقني)',
@@ -98,7 +98,7 @@ export const UserManager: React.FC = () => {
       text: 'text-amber-800',
       activeRing: 'ring-amber-500 border-amber-500 bg-amber-50/50',
       icon: Code,
-      desc: 'صلاحيات الدعم والبرمجة: الربط السحابي مع Supabase، فحص ومزامنة البيانات، وصيانة وتطوير ميزات المنظومة.'
+      desc: 'صلاحيات برمجية وإدارية شاملة (مطابقة للآدمن): حذف وتعديل أي فواتير أو أصناف نهائياً، الربط السحابي، فحص وتطوير المنظومة بالكامل.'
     },
     branch_manager: {
       label: 'مدير الفرع',
@@ -108,7 +108,7 @@ export const UserManager: React.FC = () => {
       text: 'text-purple-800',
       activeRing: 'ring-purple-500 border-purple-500 bg-purple-50/50',
       icon: Building,
-      desc: 'إدارة مستودع الفرع، متابعة حركات المخزون، اعتماد وتجهيز طلبيات المناديب الصادرة من مخزن الفرع.'
+      desc: 'إدارة كاملة لمخزن الفرع: طلب تحويلات بضاعة من مخزن أكتوبر، اعتماد وصرف وتجهيز طلبيات المناديب بالفرع، ومتابعة حركات التوريد والمخزون.'
     },
     supervisor: {
       label: 'مشرف المناديب',
@@ -118,7 +118,7 @@ export const UserManager: React.FC = () => {
       text: 'text-blue-800',
       activeRing: 'ring-blue-500 border-blue-500 bg-blue-50/50',
       icon: UserCheck,
-      desc: 'الإشراف الميداني على المناديب التابعين له بالفرع، مراجعة وتدقيق الفواتير، ومتابعة المستهدفات وعدد الكراتين.'
+      desc: 'الإشراف على مناديب الفرع: مراجعة وتدقيق واعتماد الطلبيات أو إرسالها لمدير الفرع، طلب تحويلات من أكتوبر، ومتابعة المستهدفات وعدد الكراتين.'
     },
     sales_rep: {
       label: 'المندوب',
@@ -128,7 +128,7 @@ export const UserManager: React.FC = () => {
       text: 'text-emerald-800',
       activeRing: 'ring-emerald-500 border-emerald-500 bg-emerald-50/50',
       icon: Smartphone,
-      desc: 'مندوب المبيعات الميداني: إنشاء الفواتير وإرسالها بالواتساب، ومتابعة عملاء خط السير ومخزون الفرع.'
+      desc: 'مندوب مبيعات ميداني: إنشاء وتجهيز طلبيات البيع لعملائه المسجلين وإرسالها (لا يوافق على الطلبيات ولا ينفذ تحويلات مخزنية بنفسه).'
     }
   };
 
@@ -348,6 +348,10 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
     const cleanEmail = formData.email.trim().toLowerCase();
     const cleanUsername = cleanEmail.includes('@') ? cleanEmail.split('@')[0] : cleanEmail;
 
+    const assignedBranch = (formData.role === 'admin' || formData.role === 'developer')
+      ? 'جميع الفروع والمخزن المركزي (6 أكتوبر)'
+      : (formData.branchName || currentUser?.branchName || 'فرع القاهرة');
+
     if (editingUser) {
       updateUser({
         ...editingUser,
@@ -355,6 +359,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
         name: formData.name.trim(),
         email: cleanEmail,
         username: formData.username?.trim() || cleanUsername,
+        branchName: assignedBranch,
       } as User);
       setEditingUser(null);
     } else {
@@ -365,7 +370,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
         email: cleanEmail,
         password: formData.password || '',
         role: formData.role || 'sales_rep',
-        branchName: formData.branchName || currentUser?.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)',
+        branchName: assignedBranch,
         supervisorId: formData.role === 'sales_rep' ? (formData.supervisorId || undefined) : undefined,
         phone: formData.phone || '',
         avatar: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80`,
@@ -375,6 +380,11 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
       };
       addUser(newUser);
     }
+
+    // Immediately trigger rep linking
+    setTimeout(() => {
+      refreshCustomerRepLinks();
+    }, 100);
 
     setShowAddUserModal(false);
   };
@@ -1066,19 +1076,30 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {/* Branch Selector */}
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">الفرع التابع له *</label>
-                    <select
-                      value={formData.branchName}
-                      onChange={(e) => setFormData({ ...formData, branchName: e.target.value, supervisorId: '' })}
-                      disabled={!isSuperAdminOrDev}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs cursor-pointer disabled:opacity-70 disabled:bg-slate-100"
-                    >
-                      {branches.filter((b) => !b.isMainWarehouse).map((b) => (
-                        <option key={b.id} value={b.name}>
-                          {b.name}
-                        </option>
-                      ))}
-                    </select>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      {formData.role === 'admin' || formData.role === 'developer'
+                        ? 'نطاق الصلاحية الجغرافية'
+                        : 'الفرع التابع له *'}
+                    </label>
+                    {formData.role === 'admin' || formData.role === 'developer' ? (
+                      <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl font-black text-amber-950 text-xs flex items-center gap-2">
+                        <span>🌐</span>
+                        <span>جميع الفروع (7) + المخزن المركزي (6 أكتوبر)</span>
+                      </div>
+                    ) : (
+                      <select
+                        value={formData.branchName}
+                        onChange={(e) => setFormData({ ...formData, branchName: e.target.value, supervisorId: '' })}
+                        disabled={!isSuperAdminOrDev}
+                        className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs cursor-pointer disabled:opacity-70 disabled:bg-slate-100"
+                      >
+                        {branches.filter((b) => !b.isMainWarehouse).map((b) => (
+                          <option key={b.id} value={b.name}>
+                            {b.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
 
                   {/* Supervisor Selector (If Sales Rep) */}
