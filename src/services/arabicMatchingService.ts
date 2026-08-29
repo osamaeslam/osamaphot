@@ -619,6 +619,13 @@ export function doesCustomerBelongToRep(customer: Customer, repUser: User): bool
     repField.toLowerCase() === 'none';
 
   if (!isGenericRep) {
+    // If the customer has a specified branch, it MUST match the sales rep's branch
+    if (repUser.branchName && customer.branchName) {
+      if (!isBranchMatch(customer.branchName, repUser.branchName, { allowUnassigned: false })) {
+        return false;
+      }
+    }
+
     const currentRepName = (repUser.name || '').trim();
     const currentRepUsername = (repUser.username || '').trim();
 
@@ -645,8 +652,6 @@ export function doesCustomerBelongToRep(customer: Customer, repUser: User): bool
     const repNameWords = normUserName.split(' ').filter(Boolean);
     const sharedNameWords = repNameWords.filter((word) => repFieldWords.includes(word));
     if (repNameWords.length >= 2 && sharedNameWords.length >= 2) return true;
-    if (repNameWords.length === 1 && repFieldWords.includes(repNameWords[0])) return true;
-    if (repFieldWords.length === 1 && repNameWords.includes(repFieldWords[0])) return true;
 
     // Not matching this rep
     return false;

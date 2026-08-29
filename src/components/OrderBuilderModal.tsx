@@ -131,19 +131,7 @@ export const OrderBuilderModal: React.FC<OrderBuilderModalProps> = ({
   // Compute customers by scope
   const repScopedCustomers = useMemo(() => {
     if (!activeRepUser) return customers;
-    const currentRep = (activeRepUser.name || '').trim();
-    const currentRepUsername = (activeRepUser.username || '').trim();
-
-    return customers.filter((c) => {
-      const customerRep = (c.rep_name || c.repName || c.salesRepName || c.representative_name || '').toString().trim();
-      if (customerRep) {
-        if (customerRep === currentRep) return true;
-        if (currentRepUsername && customerRep === currentRepUsername) return true;
-        if (isArabicNameMatch(customerRep, currentRep)) return true;
-        if (currentRepUsername && isArabicNameMatch(customerRep, currentRepUsername)) return true;
-      }
-      return doesCustomerBelongToRep(c, activeRepUser);
-    });
+    return customers.filter((c) => doesCustomerBelongToRep(c, activeRepUser));
   }, [customers, activeRepUser]);
 
   const branchScopedCustomers = useMemo(() => {

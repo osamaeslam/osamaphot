@@ -2532,28 +2532,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return customers.filter((c) => doesCustomerBelongToSupervisor(c, currentUser, users));
     }
 
-    // Sales Rep: STRICT PRIVACY - ONLY his own customers in his branch (matching rep_name / repName / salesRepName)
-    const currentRep = (currentUser.name || '').trim();
-    const currentRepUsername = (currentUser.username || '').trim();
-
-    return customers.filter((customer) => {
-      const customerRep = (
-        customer.rep_name ||
-        customer.repName ||
-        customer.salesRepName ||
-        customer.representative_name ||
-        ''
-      ).toString().trim();
-
-      if (customerRep) {
-        if (customerRep === currentRep) return true;
-        if (currentRepUsername && customerRep === currentRepUsername) return true;
-        if (isArabicNameMatch(customerRep, currentRep)) return true;
-        if (currentRepUsername && isArabicNameMatch(customerRep, currentRepUsername)) return true;
-      }
-
-      return doesCustomerBelongToRep(customer, currentUser);
-    });
+    // Sales Rep: STRICT PRIVACY - ONLY his own customers in his branch
+    return customers.filter((c) => doesCustomerBelongToRep(c, currentUser));
   };
 
   const getVisibleProducts = (): Product[] => {
