@@ -506,9 +506,13 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;
                           importProductsList(parsed.products, 'replace');
                           setSyncStatusMsg(`تم استعادة ${parsed.products.length} صنف بنجاح من النسخة الاحتياطية!`);
                           setTimeout(() => setSyncStatusMsg(null), 4000);
+                        } else {
+                          setSyncStatusMsg('⚠️ الملف لا يحتوي على قائمة أصناف صالحة');
+                          setTimeout(() => setSyncStatusMsg(null), 5000);
                         }
                       } catch (err) {
-                        alert('الملف غير صالح أو بصيغة JSON غير صحيحة');
+                        setSyncStatusMsg('❌ الملف غير صالح أو بصيغة JSON غير صحيحة');
+                        setTimeout(() => setSyncStatusMsg(null), 5000);
                       }
                     };
                     reader.readAsText(file);

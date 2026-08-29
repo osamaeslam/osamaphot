@@ -90,8 +90,10 @@ export const InventoryStockView: React.FC = () => {
   const [rejectModalInvoiceId, setRejectModalInvoiceId] = useState<string | null>(null);
   const [rejectReasonText, setRejectReasonText] = useState<string>('نفاذ الكمية أو عدم استيفاء شروط الائتمان');
 
-  // Success Notification Toast
+  // Success & Error Notification Toasts
   const [actionSuccessMsg, setActionSuccessMsg] = useState<string | null>(null);
+  const [actionErrorMsg, setActionErrorMsg] = useState<string | null>(null);
+  const [productToDelete, setProductToDelete] = useState<Product | null>(null);
 
   // Form State for Adding / Editing Product
   const [formData, setFormData] = useState<Partial<Product>>({
@@ -303,12 +305,14 @@ export const InventoryStockView: React.FC = () => {
     if (!stockTransferModal || transferAmount <= 0) return;
 
     if (currentUser?.role === 'sales_rep') {
-      alert('عذراً، طلبات التحويل من مخزن أكتوبر هي مسؤولية مدير الفرع ومشرف المناديب فقط.');
+      setActionErrorMsg('عذراً، طلبات التحويل من مخزن أكتوبر هي مسؤولية مدير الفرع ومشرف المناديب فقط.');
+      setTimeout(() => setActionErrorMsg(null), 5000);
       return;
     }
 
     if (stockTransferModal.mainWarehouseActual < transferAmount) {
-      alert('الكمية المطلوبة تتجاوز مخزون الكراتين الفعلي المتاح بالمخزن المركزي!');
+      setActionErrorMsg('الكمية المطلوبة تتجاوز مخزون الكراتين الفعلي المتاح بالمخزن المركزي!');
+      setTimeout(() => setActionErrorMsg(null), 5000);
       return;
     }
 
@@ -338,7 +342,8 @@ export const InventoryStockView: React.FC = () => {
       setActionSuccessMsg(res.message);
       setTimeout(() => setActionSuccessMsg(null), 4500);
     } else {
-      alert(res.message);
+      setActionErrorMsg(res.message);
+      setTimeout(() => setActionErrorMsg(null), 5000);
     }
   };
 
@@ -947,11 +952,7 @@ export const InventoryStockView: React.FC = () => {
                       {/* Delete (Admin & Developer Only) */}
                       {(currentUser?.role === 'admin' || currentUser?.role === 'developer') && (
                         <button
-                          onClick={() => {
-                            if (window.confirm(`هل أنت متأكد من حذف الصنف (${p.name}) نهائياً من قاعدة البيانات؟`)) {
-                              deleteProduct(p.id);
-                            }
-                          }}
+                          onClick={() => setProductToDelete(p)}
                           className="bg-slate-100 hover:bg-rose-100 text-slate-400 hover:text-rose-600 p-2 rounded-xl transition cursor-pointer"
                           title="حذف الصنف نهائياً"
                         >
@@ -1162,11 +1163,7 @@ export const InventoryStockView: React.FC = () => {
                               {/* Delete (Admin & Developer Only) */}
                               {(currentUser?.role === 'admin' || currentUser?.role === 'developer') && (
                                 <button
-                                  onClick={() => {
-                                    if (window.confirm(`هل أنت متأكد من حذف الصنف (${p.name}) نهائياً من قاعدة البيانات؟`)) {
-                                      deleteProduct(p.id);
-                                    }
-                                  }}
+                                  onClick={() => setProductToDelete(p)}
                                   className="bg-slate-100 hover:bg-rose-100 text-slate-400 hover:text-rose-600 p-1.5 rounded-lg transition cursor-pointer"
                                   title="حذف الصنف نهائياً"
                                 >
@@ -1887,10 +1884,8 @@ export const InventoryStockView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => {
-                        if (window.confirm(`هل أنت متأكد من حذف الصنف (${editingProduct.name}) نهائياً من قاعدة البيانات؟`)) {
-                          deleteProduct(editingProduct.id);
-                          setShowAddModal(false);
-                        }
+                        setProductToDelete(editingProduct as Product);
+                        setShowAddModal(false);
                       }}
                       className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl font-bold transition flex items-center gap-1.5 cursor-pointer"
                     >
@@ -1917,6 +1912,58 @@ export const InventoryStockView: React.FC = () => {
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Deleting Product */}
+      {productToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white border border-rose-200 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="w-6 h-6 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">تأكيد حذف الصنف نهائياً</h3>
+                <p className="text-xs text-rose-600 font-bold">{productToDelete.name} ({productToDelete.code})</p>
+              </div>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              هل أنت متأكد من رغبتك في حذف الصنف <strong>"{productToDelete.name}"</strong> نهائياً من قاعدة بيانات المخازن؟
+            </p>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  deleteProduct(productToDelete.id);
+                  setActionSuccessMsg(`تم حذف الصنف (${productToDelete.name}) بنجاح`);
+                  setTimeout(() => setActionSuccessMsg(null), 3500);
+                  setProductToDelete(null);
+                }}
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition cursor-pointer"
+              >
+                نعم، تأكيد الحذف
+              </button>
+              <button
+                type="button"
+                onClick={() => setProductToDelete(null)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl text-xs transition cursor-pointer"
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error Toast Notification */}
+      {actionErrorMsg && (
+        <div className="fixed bottom-5 left-5 z-50 bg-rose-600 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-3 border border-rose-500 animate-in slide-in-from-bottom duration-300">
+          <AlertCircle className="w-5 h-5 flex-shrink-0 text-white" />
+          <span className="text-xs font-black">{actionErrorMsg}</span>
+          <button onClick={() => setActionErrorMsg(null)} className="p-1 hover:bg-rose-700 rounded-lg cursor-pointer">
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 

@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   Calendar,
   CheckCircle2,
   ChevronLeft,
@@ -58,6 +59,8 @@ export const InvoicesManager: React.FC<InvoicesManagerProps> = ({
   const [rejectModalInvoiceId, setRejectModalInvoiceId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('نفاذ الكمية أو طلب العميل إلغاء الطلبية');
   const [successToast, setSuccessToast] = useState<string | null>(null);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
+  const [invoiceToDelete, setInvoiceToDelete] = useState<Invoice | null>(null);
 
   // Pagination state for responsive multi-page browsing
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -205,7 +208,8 @@ export const InvoicesManager: React.FC<InvoicesManagerProps> = ({
       setSuccessToast(res.message);
       setTimeout(() => setSuccessToast(null), 4000);
     } else {
-      alert(res.message);
+      setErrorToast(res.message);
+      setTimeout(() => setErrorToast(null), 5000);
     }
   };
 
@@ -627,11 +631,7 @@ export const InvoicesManager: React.FC<InvoicesManagerProps> = ({
                           {/* Delete (Admin & Developer only) */}
                           {(currentUser?.role === 'admin' || currentUser?.role === 'developer') && (
                             <button
-                              onClick={() => {
-                                if (window.confirm(`هل أنت متأكد من حذف الفاتورة رقم ${invoice.invoiceNumber} نهائياً؟`)) {
-                                  deleteInvoice(invoice.id);
-                                }
-                              }}
+                              onClick={() => setInvoiceToDelete(invoice)}
                               className="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg transition cursor-pointer"
                               title="حذف الفاتورة نهائياً"
                             >
@@ -850,6 +850,58 @@ export const InvoicesManager: React.FC<InvoicesManagerProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Deleting Invoice */}
+      {invoiceToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white border border-rose-200 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="w-6 h-6 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">تأكيد حذف الفاتورة نهائياً</h3>
+                <p className="text-xs text-rose-600 font-bold">فاتورة رقم #{invoiceToDelete.invoiceNumber}</p>
+              </div>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              هل أنت متأكد من رغبتك في حذف الفاتورة رقم <strong>#{invoiceToDelete.invoiceNumber}</strong> الخاصة بالعميل <strong>"{invoiceToDelete.customerName}"</strong> نهائياً من قاعدة البيانات؟
+            </p>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  deleteInvoice(invoiceToDelete.id);
+                  setInvoiceToDelete(null);
+                  setSuccessToast(`تم حذف الفاتورة #${invoiceToDelete.invoiceNumber} بنجاح`);
+                  setTimeout(() => setSuccessToast(null), 3500);
+                }}
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition cursor-pointer"
+              >
+                نعم، حذف الفاتورة
+              </button>
+              <button
+                type="button"
+                onClick={() => setInvoiceToDelete(null)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl text-xs transition cursor-pointer"
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error Toast Notification */}
+      {errorToast && (
+        <div className="fixed bottom-5 left-5 z-50 bg-rose-600 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-3 border border-rose-500 animate-in slide-in-from-bottom duration-300">
+          <AlertCircle className="w-5 h-5 flex-shrink-0 text-white" />
+          <span className="text-xs font-black">{errorToast}</span>
+          <button onClick={() => setErrorToast(null)} className="p-1 hover:bg-rose-700 rounded-lg cursor-pointer">
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 

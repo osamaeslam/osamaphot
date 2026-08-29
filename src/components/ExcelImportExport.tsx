@@ -68,6 +68,7 @@ export const ExcelImportExport: React.FC = () => {
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'google_sheets' | 'excel_file' | 'drive_scanner' | 'customers'>('google_sheets');
+  const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null);
 
   // Customer Management State
   const [customerGoogleSheetUrl, setCustomerGoogleSheetUrl] = useState('');
@@ -1481,11 +1482,7 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                               <td className="p-3 text-center">
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    if (window.confirm(`هل أنت متأكد من حذف العميل (${c.name})؟`)) {
-                                      deleteCustomer(c.id);
-                                    }
-                                  }}
+                                  onClick={() => setCustomerToDelete(c)}
                                   className="text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 cursor-pointer transition"
                                   title="حذف العميل"
                                 >
@@ -1613,6 +1610,45 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                 className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-black py-2.5 rounded-2xl text-xs shadow-md transition cursor-pointer disabled:opacity-50"
               >
                 {isWiping ? 'جاري المسح...' : 'نعم، مسح والبدء من جديد'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Deleting Customer */}
+      {customerToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white border border-rose-200 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="w-6 h-6 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">تأكيد حذف بيانات العميل</h3>
+                <p className="text-xs text-rose-600 font-bold">{customerToDelete.name} ({customerToDelete.code})</p>
+              </div>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              هل أنت متأكد من رغبتك في حذف العميل <strong>"{customerToDelete.name}"</strong> نهائياً من قاعدة بيانات العملاء؟
+            </p>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  deleteCustomer(customerToDelete.id);
+                  setCustomerToDelete(null);
+                }}
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition cursor-pointer"
+              >
+                نعم، حذف العميل
+              </button>
+              <button
+                type="button"
+                onClick={() => setCustomerToDelete(null)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl text-xs transition cursor-pointer"
+              >
+                إلغاء
               </button>
             </div>
           </div>

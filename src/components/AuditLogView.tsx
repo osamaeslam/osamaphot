@@ -57,6 +57,7 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({ onViewInvoice }) => 
 
   // Selected Log Details Modal
   const [selectedLogDetail, setSelectedLogDetail] = useState<AuditLog | null>(null);
+  const [showClearConfirmModal, setShowClearConfirmModal] = useState<boolean>(false);
 
   // Reset page when filters change
   useEffect(() => {
@@ -272,11 +273,7 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({ onViewInvoice }) => 
 
             {(currentUser?.role === 'admin' || currentUser?.role === 'developer') && (
               <button
-                onClick={() => {
-                  if (window.confirm('هل أنت متأكد من مسح جميع سجلات العمليات؟ لا يمكن التراجع عن هذا الإجراء.')) {
-                    clearAuditLogs();
-                  }
-                }}
+                onClick={() => setShowClearConfirmModal(true)}
                 className="flex items-center gap-1.5 bg-rose-900/40 hover:bg-rose-800/60 border border-rose-700/60 text-rose-200 px-3.5 py-2.5 rounded-xl text-xs font-bold transition shadow-sm cursor-pointer"
                 title="مسح السجل (للأدمن فقط)"
               >
@@ -906,6 +903,45 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({ onViewInvoice }) => 
                 className="w-full bg-slate-100 hover:bg-slate-200 text-slate-800 font-black py-2.5 rounded-xl text-xs transition cursor-pointer"
               >
                 إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Clearing Logs */}
+      {showClearConfirmModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white border border-rose-200 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="w-6 h-6 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">مسح كافة سجلات العمليات</h3>
+                <p className="text-xs text-rose-600 font-bold">إجراء حساس (خاص بالإدارة)</p>
+              </div>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              هل أنت متأكد من مسح جميع سجلات العمليات والتتبع؟ لا يمكن التراجع عن هذا الإجراء بعد تنفيذه.
+            </p>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  clearAuditLogs();
+                  setShowClearConfirmModal(false);
+                }}
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition cursor-pointer"
+              >
+                نعم، مسح السجل الآن
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowClearConfirmModal(false)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl text-xs transition cursor-pointer"
+              >
+                إلغاء
               </button>
             </div>
           </div>

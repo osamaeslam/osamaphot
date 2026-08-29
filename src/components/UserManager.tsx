@@ -66,6 +66,7 @@ export const UserManager: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
 
   const isSuperAdminOrDev = currentUser?.role === 'admin' || currentUser?.role === 'developer';
 
@@ -903,11 +904,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                         {/* Delete (Admin & Dev only, if not self) */}
                         {isSuperAdminOrDev && !isCurrent && (
                           <button
-                            onClick={() => {
-                              if (window.confirm(`هل أنت متأكد من حذف حساب "${user.name}"؟`)) {
-                                deleteUser(user.id);
-                              }
-                            }}
+                            onClick={() => setUserToDelete(user)}
                             className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 cursor-pointer"
                             title="حذف الحساب"
                           >
@@ -1276,6 +1273,45 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
               >
                 <Check className="w-4 h-4" />
                 <span>اعتماد وتفعيل الحساب فوراً</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Deleting User */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white border border-rose-200 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="w-6 h-6 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">تأكيد حذف حساب الموظف</h3>
+                <p className="text-xs text-rose-600 font-bold">{userToDelete.name} ({userToDelete.branchName})</p>
+              </div>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              هل أنت متأكد من رغبتك في حذف حساب <strong>"{userToDelete.name}"</strong> نهائياً من المنظومة؟
+            </p>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  deleteUser(userToDelete.id);
+                  setUserToDelete(null);
+                }}
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition cursor-pointer"
+              >
+                نعم، تأكيد الحذف
+              </button>
+              <button
+                type="button"
+                onClick={() => setUserToDelete(null)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl text-xs transition cursor-pointer"
+              >
+                إلغاء
               </button>
             </div>
           </div>
