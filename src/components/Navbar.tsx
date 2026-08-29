@@ -105,7 +105,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, onOpenC
           {/* Brand & Logo */}
           <div className="flex items-center gap-2 sm:gap-3">
             <div className="h-9 w-9 sm:h-11 sm:w-11 rounded-full bg-white p-0.5 border-2 border-amber-400 shadow-md shadow-amber-500/20 flex items-center justify-center shrink-0 overflow-hidden">
-              <img src="/icon.svg" alt="مجموعة الطنطاوي - TANTAWY GROUP" className="h-full w-full object-contain" />
+              <img src="/tantawy-brand-logo.svg?v=3.1" alt="مجموعة الطنطاوي - TANTAWY GROUP" className="h-full w-full object-contain" />
             </div>
             <div>
               <div className="flex items-center gap-1.5">
@@ -199,14 +199,15 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, onOpenC
                   aria-label="تصفية الفرع"
                   value={selectedBranchFilter}
                   onChange={(e) => setSelectedBranchFilter(e.target.value)}
-                  className="bg-slate-800 text-slate-200 text-xs rounded-xl px-2.5 h-10 border border-slate-700 focus:outline-none focus:border-amber-400 font-bold"
+                  className="bg-slate-800 text-slate-200 text-xs rounded-xl px-2.5 h-10 border border-slate-700 focus:outline-none focus:border-amber-400 font-bold cursor-pointer"
                 >
-                  <option value="الكل">🏢 كل الفروع</option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.name}>
-                      {b.name}
-                    </option>
-                  ))}
+                  {branches
+                    .filter((b) => !b.isMainWarehouse && !b.name.includes('المخزن المركزي') && !b.name.includes('الفرع الرئيسي'))
+                    .map((b) => (
+                      <option key={b.id} value={b.name}>
+                        🏢 {b.name}
+                      </option>
+                    ))}
                 </select>
               </div>
             )}

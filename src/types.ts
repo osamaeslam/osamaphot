@@ -82,6 +82,8 @@ export interface Product {
   promoPrice?: number;               // سعر العرض للكرتونة (اختياري)
   promoPiecePrice?: number;          // سعر العرض للقطعة الفردية (يُحسب تلقائياً = promoPrice / cartonQuantity)
   offerPrice?: number;               // مرادف سعر العرض
+  discountPercent?: number;          // نسبة الخصم الإضافية
+  discountPercentage?: number;       // نسبة الخصم
   piecePrice?: number;               // سعر القطعة (Sales Price)
   salesPrice?: number;               // سعر القطعة (Sales Price)
   cartonPrice: number;               // سعر الكرتونة (Factor * Sales Price)
@@ -105,11 +107,14 @@ export interface Customer {
   address?: string;                  // العنوان التفصيلي
   governorate?: string;              // المحافظة
   branchName: string;                // اسم الفرع (الفرع)
+  rep_name?: string;                 // اسم المندوب في قاعدة البيانات (rep_name)
   repName?: string;                  // اسم المندوب المسئول (المندوب الحالي)
   salesRepName?: string;             // المندوب المسئول (alias)
+  representative_name?: string;      // اسم المندوب (alias)
   repId?: string;                    // كود المندوب
   taxNumber?: string;                // الرقم الضريبي
   balance?: number;                  // رصيد الحساب الحالي
+  currentBalance?: number;           // المديونية الحالية
   creditLimit?: number;              // الحد الائتماني
   lastOrderDate?: string;            // تاريخ آخر طلبية
   totalOrdersCount?: number;         // إجمالي عدد الطلبيات
@@ -141,8 +146,11 @@ export type OrderStatus =
   | 'معتمدة ومصروفة من المخزن'
   | 'معتمدة'
   | 'جاري التجهيز'
+  | 'جاري تحضير المنتجات'
+  | 'تم وصول المنتجات'
   | 'قيد التوصيل'
   | 'تم التسليم'
+  | 'إغلاق الطلبية'
   | 'مرتجع'
   | 'مرفوضة / ملغاة'
   | 'ملغاة';
@@ -223,6 +231,13 @@ export interface Invoice {
   syncedToAccounting?: boolean;
   accountingSyncDate?: string;
   qrPayload?: string;
+
+  // Customer Debt & Credit Limit Tracking
+  customerBalanceBefore?: number;
+  customerCreditLimit?: number;
+  customerBalanceAfter?: number;
+  creditLimitExceeded?: boolean;
+  requiredDownPayment?: number;
 
   // Shortage Backorders & Splitting
   isShortageInvoice?: boolean;

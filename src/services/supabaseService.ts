@@ -133,19 +133,39 @@ export async function fetchCustomersFromSupabase(): Promise<{ success: boolean; 
     }
 
     if (rawCustomers && rawCustomers.length > 0) {
-      const mapped: Customer[] = rawCustomers.map((c: any, idx: number) => ({
-        id: c.id || `cust-${idx + 1}`,
-        code: c.code || c.customer_code || `CUST-${1000 + idx + 1}`,
-        name: c.name || c.customer_name || 'عميل بدون اسم',
-        phone: c.phone || c.mobile || '',
-        address: c.address || c.region || c.city || '',
-        branchName: c.branch_name || c.branchName || 'فرع القاهرة',
-        repName: c.rep_name || c.repName || 'مندوب المبيعات',
-        repId: c.rep_id || c.repId || '',
-        taxNumber: c.tax_number || c.taxNumber || '',
-        notes: c.notes || '',
-        createdAt: c.created_at || new Date().toISOString(),
-      }));
+      const mapped: Customer[] = rawCustomers.map((c: any, idx: number) => {
+        const rawRepName = (
+          c.rep_name ||
+          c.repName ||
+          c.representative_name ||
+          c.representative ||
+          c.sales_rep ||
+          c.salesRep ||
+          c.rep ||
+          c.مندوب ||
+          ''
+        ).toString().trim();
+
+        const cleanRepName = rawRepName || 'مندوب المبيعات';
+        const cleanBranchName = (c.branch_name || c.branchName || 'فرع القاهرة').toString().trim();
+
+        return {
+          id: c.id || `cust-${idx + 1}`,
+          code: (c.code || c.customer_code || `CUST-${1000 + idx + 1}`).toString().trim(),
+          name: (c.name || c.customer_name || 'عميل بدون اسم').toString().trim(),
+          phone: (c.phone || c.mobile || '').toString().trim(),
+          address: (c.address || c.region || c.city || '').toString().trim(),
+          branchName: cleanBranchName,
+          rep_name: cleanRepName,
+          repName: cleanRepName,
+          salesRepName: cleanRepName,
+          representative_name: cleanRepName,
+          repId: (c.rep_id || c.repId || '').toString().trim(),
+          taxNumber: (c.tax_number || c.taxNumber || '').toString().trim(),
+          notes: c.notes || '',
+          createdAt: c.created_at || new Date().toISOString(),
+        };
+      });
       return { success: true, customers: mapped };
     }
 
@@ -168,11 +188,11 @@ export async function saveCustomersToSupabase(customers: Customer[]): Promise<{ 
       return {
         id: safeId,
         code: c.code || null,
-        name: c.name || 'عميل بدون اسم',
-        phone: c.phone || '',
-        address: c.address || '',
-        branch_name: c.branchName || 'الفرع الرئيسي',
-        rep_name: c.repName || 'مندوب المبيعات',
+        name: (c.name || 'عميل بدون اسم').trim(),
+        phone: (c.phone || '').trim(),
+        address: (c.address || '').trim(),
+        branch_name: (c.branchName || 'فرع القاهرة').trim(),
+        rep_name: (c.rep_name || c.repName || c.salesRepName || c.representative_name || 'مندوب المبيعات').trim(),
         rep_id: c.repId || null,
         tax_number: c.taxNumber || null,
         notes: c.notes || null,

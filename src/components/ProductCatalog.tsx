@@ -278,10 +278,14 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
   // Active branch context for stock resolution: specific user's branch for reps/supervisors, or global filter for admin
   const currentActiveBranch = useMemo(() => {
     if (currentUser?.role === 'sales_rep' || currentUser?.role === 'supervisor' || currentUser?.role === 'branch_manager') {
-      return currentUser.branchName || 'فرع أكتوبر (الفرع الرئيسي والمخزن المركزي)';
+      if (currentUser.branchName && !currentUser.branchName.includes('الرئيسي') && !currentUser.branchName.includes('المركزي')) {
+        return currentUser.branchName;
+      }
     }
-    return selectedBranchFilter !== 'الكل' ? selectedBranchFilter : (currentUser?.branchName || '');
-  }, [currentUser, selectedBranchFilter]);
+    return selectedBranchFilter && selectedBranchFilter !== 'الكل' && !selectedBranchFilter.includes('الرئيسي')
+      ? selectedBranchFilter
+      : (branches[0]?.name || 'فرع القاهرة');
+  }, [currentUser, selectedBranchFilter, branches]);
 
   // Helper to get effective branch stock for a product for current viewer
   const getProductBranchStock = (p: Product) => {
@@ -303,7 +307,15 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
       const octoberStock = p.mainWarehouseActual || 0;
       const isCompletelyOut = branchStock <= 0 && octoberStock <= 0;
       
-      if (p.promoPrice || p.promoPiecePrice || p.offerPrice) {
+      const isAnOffer = Boolean(
+        (p.promoPrice && p.promoPrice > 0 && p.promoPrice < p.cartonPrice) ||
+        (p.promoPiecePrice && p.promoPiecePrice > 0) ||
+        (p.offerPrice && p.offerPrice > 0) ||
+        p.status === 'عرض ترويجي' ||
+        (p.discountPercent && p.discountPercent > 0) ||
+        (p.salesPriority && p.salesPriority.includes('عرض'))
+      );
+      if (isAnOffer) {
         offers++;
       }
 
@@ -339,11 +351,6 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
   // Filtered & Sorted Products
   const filteredProducts = useMemo(() => {
     let result = products.filter((p) => {
-      // Branch filter if not 'الكل'
-      if (selectedBranchFilter !== 'الكل' && p.branchName && p.branchName !== selectedBranchFilter) {
-        if (p.mainWarehouseActual <= 0 && p.branchStockActual <= 0) return false;
-      }
-
       // Search match
       if (searchTerm.trim()) {
         const query = searchTerm.toLowerCase().trim();
@@ -409,7 +416,15 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
       const oStock = p.mainWarehouseActual || 0;
 
       if (stockAvailabilityFilter === 'offers') {
-        if (!p.promoPrice && !p.promoPiecePrice && !p.offerPrice) return false;
+        const isOffer = Boolean(
+          (p.promoPrice && p.promoPrice > 0 && p.promoPrice < p.cartonPrice) ||
+          (p.promoPiecePrice && p.promoPiecePrice > 0) ||
+          (p.offerPrice && p.offerPrice > 0) ||
+          p.status === 'عرض ترويجي' ||
+          (p.discountPercent && p.discountPercent > 0) ||
+          (p.salesPriority && p.salesPriority.includes('عرض'))
+        );
+        if (!isOffer) return false;
       } else if (stockAvailabilityFilter === 'out_of_stock') {
         // بدون مخزون: الصنف منتهي تماماً (رصيد الفرع 0 ورصيد أكتوبر 0)
         if (bStock > 0 || oStock > 0) return false;
@@ -662,7 +677,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
         </div>
       )}
 
-      {/* Active Branch Scope Indicator & Switcher for Admin / Developer / Sales Reps */}
+      {/* Active Branch Scope Indicator & Switcher (The 7 Operational Branches) */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-slate-100 border border-slate-300/80 rounded-2xl p-3 sm:p-3.5 shadow-xs">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-black shrink-0 shadow-xs">
@@ -672,35 +687,34 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-bold text-slate-500">الفرع المعروض أرصدته حالياً:</span>
               <span className="bg-amber-400 text-slate-950 text-xs font-black px-2.5 py-0.5 rounded-lg shadow-2xs">
-                {currentActiveBranch || 'كل الفروع والمخزن الرئيسي'}
+                {currentActiveBranch || 'فرع القاهرة'}
               </span>
             </div>
             <p className="text-[11px] text-slate-600 mt-0.5">
-              مخزن أكتوبر هو المخزن المركزي الرئيسي لكافة الفروع الـ 7.
+              يتم عرض رصيد الفرع المختار بجانب رصيد مخزن أكتوبر الرئيسي الثابت.
             </p>
           </div>
         </div>
 
-        {(currentUser?.role === 'admin' || currentUser?.role === 'developer') && (
-          <div className="flex items-center gap-2">
-            <label htmlFor="catalog-branch-select" className="text-xs font-bold text-slate-700 shrink-0">
-              تبديل فرع العرض:
-            </label>
-            <select
-              id="catalog-branch-select"
-              value={selectedBranchFilter}
-              onChange={(e) => setSelectedBranchFilter(e.target.value)}
-              className="bg-white border border-slate-300 text-slate-900 font-black rounded-xl px-3 py-1.5 text-xs focus:ring-2 focus:ring-amber-400 focus:outline-none shadow-2xs"
-            >
-              <option value="الكل">كل الفروع (أكتوبر المركزي)</option>
-              {branches.map((b) => (
+        <div className="flex items-center gap-2">
+          <label htmlFor="catalog-branch-select" className="text-xs font-bold text-slate-700 shrink-0">
+            تبديل فرع العرض (7 فروع):
+          </label>
+          <select
+            id="catalog-branch-select"
+            value={currentActiveBranch}
+            onChange={(e) => setSelectedBranchFilter(e.target.value)}
+            className="bg-white border border-slate-300 text-slate-900 font-black rounded-xl px-3 py-1.5 text-xs focus:ring-2 focus:ring-amber-400 focus:outline-none shadow-2xs cursor-pointer"
+          >
+            {branches
+              .filter((b) => !b.isMainWarehouse && !b.name.includes('المخزن المركزي') && !b.name.includes('الفرع الرئيسي'))
+              .map((b) => (
                 <option key={b.id} value={b.name}>
                   {b.name}
                 </option>
               ))}
-            </select>
-          </div>
-        )}
+          </select>
+        </div>
       </div>
 
       {/* Unified, Clean Search & Quick Filters Bar - Simplified for Mobile with high touch targets */}
@@ -873,6 +887,22 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
             }`}
           >
             الكل ({stockCounts.all})
+          </button>
+          <button
+            id="filter-offers-pill-btn"
+            onClick={() => setStockAvailabilityFilter('offers')}
+            className={`px-3 py-1 rounded-lg text-xs font-black whitespace-nowrap transition cursor-pointer shrink-0 flex items-center gap-1.5 ${
+              stockAvailabilityFilter === 'offers'
+                ? 'bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 text-slate-950 shadow-md ring-2 ring-amber-300'
+                : 'bg-amber-950/50 text-amber-300 border border-amber-500/50 hover:bg-amber-900/70'
+            }`}
+          >
+            <span>🏷️ عروض وتخفيضات</span>
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-black ${
+              stockAvailabilityFilter === 'offers' ? 'bg-slate-950 text-amber-300' : 'bg-amber-400/20 text-amber-200'
+            }`}>
+              {stockCounts.offers}
+            </span>
           </button>
           <button
             onClick={() => setStockAvailabilityFilter('in_branch')}

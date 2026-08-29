@@ -16,7 +16,8 @@ import {
   Store,
   Tag,
   UserCheck,
-  X
+  X,
+  XCircle
 } from 'lucide-react';
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
@@ -37,13 +38,40 @@ export const ElectronicInvoiceModal: React.FC<ElectronicInvoiceModalProps> = ({
   isOpen,
   onClose,
 }) => {
-  const { syncToAccounting } = useApp();
+  const { syncToAccounting, currentUser, rejectOrder } = useApp();
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncSuccess, setSyncSuccess] = useState(false);
   const [isDownloadingPDF, setIsDownloadingPDF] = useState(false);
   const [copiedInvoiceNo, setCopiedInvoiceNo] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('قرار إداري من مدير الفرع / المشرف');
+  const [cancelFeedback, setCancelFeedback] = useState<string | null>(null);
 
   if (!isOpen || !invoice) return null;
+
+  const canCancelOrder =
+    (currentUser?.role === 'supervisor' ||
+      currentUser?.role === 'branch_manager' ||
+      currentUser?.role === 'admin' ||
+      currentUser?.role === 'developer') &&
+    invoice.status !== 'تم التسليم' &&
+    invoice.status !== 'إغلاق الطلبية' &&
+    invoice.status !== 'مرتجع' &&
+    invoice.status !== 'مرفوضة / ملغاة' &&
+    invoice.status !== 'ملغاة';
+
+  const handleCancelConfirm = () => {
+    if (!invoice) return;
+    const res = rejectOrder(invoice.id, cancelReason);
+    if (res.success) {
+      setCancelFeedback(res.message);
+      setShowCancelModal(false);
+      setTimeout(() => {
+        setCancelFeedback(null);
+        onClose();
+      }, 2000);
+    }
+  };
 
   const handleDownloadPDF = async () => {
     setIsDownloadingPDF(true);
@@ -417,10 +445,45 @@ export const ElectronicInvoiceModal: React.FC<ElectronicInvoiceModalProps> = ({
               </div>
 
               <div className="pt-2 border-t border-slate-700 flex justify-between items-center">
-                <span className="font-bold text-slate-200 text-xs">إجمالي الفاتورة الصافي النهائي:</span>
-                <div className="text-xl font-black text-amber-400 font-mono">
+                <span className="font-bold text-slate-200 text-xs">إجمالي الفاتورة الصافي:</span>
+                <div className="text-lg font-black text-amber-400 font-mono">
                   {formatCurrency(invoice.estimatedGrandTotal)}
                 </div>
+              </div>
+
+              {/* Customer Debt & Credit Limit Breakdown */}
+              <div className="pt-2 border-t border-slate-700/80 space-y-1.5 text-[11px]">
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>مديونية العميل السابقة:</span>
+                  <span className="font-bold font-mono">{formatCurrency(invoice.customerBalanceBefore || 0)}</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>المديونية الإجمالية بعد الفاتورة:</span>
+                  <span className={`font-black font-mono ${invoice.creditLimitExceeded ? 'text-rose-400' : 'text-emerald-400'}`}>
+                    {formatCurrency(invoice.customerBalanceAfter || ((invoice.customerBalanceBefore || 0) + invoice.estimatedGrandTotal))}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-slate-400">
+                  <span>الحد الائتماني المعتمد:</span>
+                  {(invoice.customerCreditLimit || 0) <= 0 ? (
+                    <span className="font-bold text-amber-300 text-[10px] bg-amber-950/60 border border-amber-500/50 px-2 py-0.5 rounded">
+                      لا يوجد حد ائتماني (سداد نقدي)
+                    </span>
+                  ) : (
+                    <span className="font-bold font-mono text-blue-300">{formatCurrency(invoice.customerCreditLimit || 0)}</span>
+                  )}
+                </div>
+                {invoice.creditLimitExceeded && (
+                  <div className="bg-rose-950/90 border border-rose-500/80 p-2 rounded-xl text-rose-200 text-[10px] space-y-0.5 mt-1">
+                    <div className="font-black text-rose-300 flex items-center gap-1">
+                      <span>⚠️ تم تجاوز الحد الائتماني للعميل</span>
+                    </div>
+                    <div>
+                      مبلغ السداد النقدي المطلوب فوراً:{' '}
+                      <strong className="text-amber-300 font-mono font-black">{formatCurrency(invoice.requiredDownPayment || 0)}</strong>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -459,10 +522,26 @@ export const ElectronicInvoiceModal: React.FC<ElectronicInvoiceModalProps> = ({
               <Copy className="w-3.5 h-3.5" />
               <span>{copiedInvoiceNo ? 'تم نسخ الرقم! ✓' : 'نسخ رقم الفاتورة'}</span>
             </button>
+            {/* Cancel Order button for Supervisor/Manager */}
+            {canCancelOrder && (
+              <button
+                onClick={() => setShowCancelModal(true)}
+                className="flex items-center gap-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold px-3 py-2 rounded-xl text-xs border border-rose-300 transition cursor-pointer"
+                title="إلغاء الطلبية وفك حجز المخزون"
+              >
+                <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                <span>إلغاء الطلبية ❌</span>
+              </button>
+            )}
           </div>
 
           {/* Sync to Accounting / Close */}
           <div className="flex items-center gap-2 flex-wrap">
+            {cancelFeedback && (
+              <span className="text-xs font-black text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200">
+                {cancelFeedback}
+              </span>
+            )}
             <button
               onClick={handleAccountingSync}
               disabled={isSyncing || invoice.syncedToAccounting}
@@ -491,6 +570,54 @@ export const ElectronicInvoiceModal: React.FC<ElectronicInvoiceModalProps> = ({
           </div>
 
         </div>
+
+        {/* Cancel Modal Confirmation for Manager/Supervisor */}
+        {showCancelModal && (
+          <div className="fixed inset-0 z-60 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+            <div className="bg-white rounded-3xl max-w-md w-full p-5 shadow-2xl border border-rose-200 space-y-4">
+              <div className="flex items-center gap-3 text-rose-700">
+                <div className="p-2.5 bg-rose-100 rounded-2xl">
+                  <XCircle className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-slate-900">إلغاء الطلبية واسترجاع المخزون</h3>
+                  <p className="text-xs text-slate-500">فاتورة رقم: {invoice.invoiceNumber}</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-700 font-medium">
+                بصفتك (مشرف أو مدير الفرع)، يمكنك إلغاء هذه الطلبية في أي وقت. سيتم فوراً فك حجز الكراتين وإرجاع الأرصدة لمخزن الفرع.
+              </p>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-800">سبب الإلغاء:</label>
+                <textarea
+                  rows={2}
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:ring-2 focus:ring-rose-500"
+                  placeholder="اكتب سبب الإلغاء..."
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  onClick={handleCancelConfirm}
+                  className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-black py-2.5 rounded-xl text-xs shadow-md transition cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <XCircle className="w-4 h-4" />
+                  <span>تأكيد الإلغاء وفك الحجز</span>
+                </button>
+                <button
+                  onClick={() => setShowCancelModal(false)}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
+                >
+                  تراجع
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

@@ -189,10 +189,13 @@ const STORAGE_KEYS = {
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Helper to normalize branch names across legacy stored data
   const normalizeBranchName = (name?: string): string => {
-    if (!name || !name.trim()) return 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)';
+    if (!name || !name.trim()) return 'فرع القاهرة';
     const clean = name.trim();
     const inferred = inferBranchFromText(clean);
-    if (inferred) return inferred;
+    if (inferred) {
+      if (inferred.includes('أكتوبر') || inferred.includes('الرئيسي')) return 'فرع القاهرة';
+      return inferred;
+    }
     if (!clean.startsWith('فرع') && !clean.includes('المخزن')) {
       return `فرع ${clean}`;
     }
@@ -306,15 +309,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!existing.taxNumber && c.taxNumber) existing.taxNumber = c.taxNumber;
         if (!existing.notes && c.notes) existing.notes = c.notes;
         if (locInferred) existing.branchName = locInferred;
-        if (c.repName && (!existing.repName || existing.repName === 'مندوب المبيعات')) existing.repName = c.repName;
+        if (c.repId && !existing.repId) existing.repId = c.repId;
+        if (c.repName && (!existing.repName || existing.repName === 'مندوب المبيعات' || existing.repName === 'المندوب')) existing.repName = c.repName;
+        if (c.salesRepName && (!existing.salesRepName || existing.salesRepName === 'مندوب المبيعات' || existing.salesRepName === 'المندوب')) existing.salesRepName = c.salesRepName;
+        if (c.creditLimit !== undefined) existing.creditLimit = Number(c.creditLimit);
+        if (c.currentBalance !== undefined || c.balance !== undefined) {
+          const bal = Number(c.currentBalance ?? c.balance ?? 0);
+          existing.currentBalance = bal;
+          existing.balance = bal;
+        }
         if (c.tier === 'مميز' || (c.tier === 'راقي' && existing.tier === 'متوسط')) {
           existing.tier = c.tier;
         }
       } else {
+        const bal = Number(c.currentBalance ?? c.balance ?? 0);
         map.set(key, {
           ...c,
           name: c.name || `عميل ${c.code || ''}`,
           branchName: resolvedBranch,
+          creditLimit: c.creditLimit !== undefined ? Number(c.creditLimit) : 0,
+          currentBalance: bal,
+          balance: bal,
         });
       }
     }
@@ -392,7 +407,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
-  const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>('الكل');
+  const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>('فرع القاهرة');
 
   // PWA Install Prompt State & Data Saver Mode
   const [installPromptEvent, setInstallPromptEvent] = useState<any>(null);
@@ -805,19 +820,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updated.branchName = normalizeBranchName(updated.branchName);
       }
 
-      const rawRep = (updated.salesRepName || updated.repName || '').trim();
+      const rawRep = (
+        updated.rep_name ||
+        updated.salesRepName ||
+        updated.repName ||
+        updated.representative_name ||
+        ''
+      ).toString().trim();
       if ((!rawRep || rawRep === 'مندوب المبيعات' || rawRep === 'المندوب') && !updated.repId) {
         return updated;
       }
 
       // Check if candidate matches rep in same branch, or overall
-      const matchFn = (u: User) =>
-        (updated.repId && u.id === updated.repId) ||
-        isArabicNameMatch(rawRep, u.name) ||
-        (u.username && isArabicNameMatch(rawRep, u.username)) ||
-        (u.phone && (rawRep.includes(u.phone) || u.phone.includes(rawRep))) ||
-        normalizeArabicText(rawRep).includes(normalizeArabicText(u.name)) ||
-        normalizeArabicText(u.name).includes(normalizeArabicText(rawRep));
+      const matchFn = (u: User) => {
+        const uName = (u.name || '').trim();
+        const uUsername = (u.username || '').trim();
+        return (
+          (updated.repId && u.id === updated.repId) ||
+          rawRep === uName ||
+          (uUsername && rawRep === uUsername) ||
+          doesCustomerBelongToRep(updated, u) ||
+          isArabicNameMatch(rawRep, uName) ||
+          (uUsername && isArabicNameMatch(rawRep, uUsername)) ||
+          (u.phone && (rawRep.includes(u.phone.trim()) || u.phone.trim().includes(rawRep))) ||
+          normalizeArabicText(rawRep).includes(normalizeArabicText(uName)) ||
+          normalizeArabicText(uName).includes(normalizeArabicText(rawRep))
+        );
+      };
 
       const branchCompatibleReps = updated.branchName
         ? reps.filter((u) => u.branchName && isBranchMatch(updated.branchName, u.branchName, { allowUnassigned: false }))
@@ -831,13 +860,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (matched) {
         return {
           ...updated,
-          repName: matched.name,
+          rep_name: matched.name.trim(),
+          repName: matched.name.trim(),
           repId: matched.id,
-          salesRepName: matched.name,
-          branchName: matched.branchName || updated.branchName || 'الفرع الرئيسي',
+          salesRepName: matched.name.trim(),
+          representative_name: matched.name.trim(),
+          branchName: matched.branchName || updated.branchName || 'فرع القاهرة',
+          creditLimit: updated.creditLimit !== undefined ? Number(updated.creditLimit) : 0,
+          currentBalance: Number(updated.currentBalance ?? updated.balance ?? 0),
+          balance: Number(updated.currentBalance ?? updated.balance ?? 0),
         };
       }
-      return updated;
+      return {
+        ...updated,
+        creditLimit: updated.creditLimit !== undefined ? Number(updated.creditLimit) : 0,
+        currentBalance: Number(updated.currentBalance ?? updated.balance ?? 0),
+        balance: Number(updated.currentBalance ?? updated.balance ?? 0),
+      };
     });
   };
 
@@ -1709,14 +1748,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const orderFinalNotes = [orderData.notes, creatorAuditNote].filter(Boolean).join('\n');
     const orderBranch = orderData.branchName || currentUser?.branchName || 'الفرع الرئيسي (المخزن المركزي - 6 أكتوبر)';
 
+    // Match customer for credit limit & debt validation
+    const matchedCustomer = customers.find(
+      (c) =>
+        (orderData.customerCode && c.code === orderData.customerCode) ||
+        (orderData.customerName && c.name.trim().toLowerCase() === orderData.customerName.trim().toLowerCase()) ||
+        (orderData.customerPhone && c.phone && c.phone.trim() === orderData.customerPhone.trim())
+    );
+
+    const custBalanceBefore = Number(matchedCustomer?.balance || 0);
+    const custCreditLimit = Number(
+      matchedCustomer?.creditLimit !== undefined && matchedCustomer?.creditLimit !== null
+        ? matchedCustomer.creditLimit
+        : 0
+    );
+    const custBalanceAfter = custBalanceBefore + primaryTotals.estimatedGrandTotal;
+    const isCreditExceeded = custCreditLimit > 0 && custBalanceAfter > custCreditLimit;
+    const reqPayment = isCreditExceeded ? Math.max(0, custBalanceAfter - custCreditLimit) : 0;
+
     const primaryInvoice: Invoice = {
       id: `inv-${Date.now()}`,
       invoiceNumber: newInvoiceNumber,
       customerName: orderData.customerName || 'عميل تجزئة عام',
-      customerCode: orderData.customerCode || undefined,
-      customerPhone: orderData.customerPhone || '',
-      customerAddress: orderData.customerAddress || '',
-      customerTaxNumber: orderData.customerTaxNumber || '',
+      customerCode: orderData.customerCode || (matchedCustomer ? matchedCustomer.code : undefined),
+      customerPhone: orderData.customerPhone || (matchedCustomer ? matchedCustomer.phone : ''),
+      customerAddress: orderData.customerAddress || (matchedCustomer ? matchedCustomer.address : ''),
+      customerTaxNumber: orderData.customerTaxNumber || (matchedCustomer ? matchedCustomer.taxNumber : ''),
       date: formattedDate,
       time: formattedTime,
       repId: assignedRepId,
@@ -1738,6 +1795,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       syncedToAccounting: false,
       hasShortageSplit: shouldSplit,
       shortageInvoiceNumber: shouldSplit ? `${newInvoiceNumber}-NQ` : undefined,
+      customerBalanceBefore: custBalanceBefore,
+      customerCreditLimit: custCreditLimit,
+      customerBalanceAfter: custBalanceAfter,
+      creditLimitExceeded: isCreditExceeded,
+      requiredDownPayment: reqPayment,
       qrPayload: `DREAM-EINV-${newInvoiceNumber}|${orderData.customerTaxNumber || 'GEN'}|${primaryTotals.estimatedGrandTotal.toFixed(2)}|${primaryTotals.taxAmount.toFixed(2)}|${formattedDate}`,
     };
 
@@ -1781,9 +1843,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    // A sales rep submission must not reserve, transfer, or deduct stock.
-    // Stock is changed only when an authorized supervisor/manager approves the order.
-    if (isDirectManager) {
+    // Reserve stock immediately to prevent double-booking by multiple sales reps.
+    // Physical actual stock is deducted only upon supervisor/manager approval.
     setProducts((prev) => {
       return prev.map((p) => {
         const cartItem = cart.find((c) => c.product.id === p.id);
@@ -1814,10 +1875,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       });
     });
-    }
 
-    // Only authorized approval actions create inventory audit movements.
-    if (isDirectManager) cart.forEach((item) => {
+    cart.forEach((item) => {
       const prod = products.find((p) => p.id === item.product.id);
       const isFromMain = item.fulfillFromMainWarehouse;
       const beforeReserved = prod ? (isFromMain ? prod.mainWarehouseReserved : prod.branchStockReserved) : 0;
@@ -1839,7 +1898,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? `حجز صنف نواقص من المخزن المركزي بأكتوبر للطلبية #${newInvoiceNumber}`
           : isDirectManager
           ? `اعتماد وصرف فوري للطلبية #${newInvoiceNumber}`
-          : `حجز رصيد للطلبية #${newInvoiceNumber} قيد مراجعة واعتماد المشرف`,
+          : `حجز رصيد للطلبية #${newInvoiceNumber} لمنع تكرار الحجز (قيد مراجعة واعتماد المشرف)`,
       });
     });
 
@@ -1972,9 +2031,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         ...p,
         branchStockActual: Math.max(0, p.branchStockActual - allocation.branch),
-        branchStockReserved: Math.max(0, p.branchStockReserved - allocation.branch),
         mainWarehouseActual: Math.max(0, p.mainWarehouseActual - allocation.main),
-        mainWarehouseReserved: Math.max(0, p.mainWarehouseReserved - allocation.main),
       };
     }));
 
@@ -2084,10 +2141,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return prev.map((p) => {
         const invItem = inv.items.find((it) => it.productId === p.id);
         if (!invItem) return p;
-        return {
-          ...p,
-          branchStockReserved: p.branchStockReserved + invItem.cartonCount,
-        };
+        if (invItem.fulfilledFrom === 'main_warehouse') {
+          return {
+            ...p,
+            mainWarehouseReserved: p.mainWarehouseReserved + invItem.cartonCount,
+          };
+        } else {
+          return {
+            ...p,
+            branchStockReserved: p.branchStockReserved + invItem.cartonCount,
+          };
+        }
       });
     });
 
@@ -2468,8 +2532,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return customers.filter((c) => doesCustomerBelongToSupervisor(c, currentUser, users));
     }
 
-    // Sales Rep: STRICT PRIVACY - ONLY his own customers in his branch
-    return customers.filter((c) => doesCustomerBelongToRep(c, currentUser));
+    // Sales Rep: STRICT PRIVACY - ONLY his own customers in his branch (matching rep_name / repName / salesRepName)
+    const currentRep = (currentUser.name || '').trim();
+    const currentRepUsername = (currentUser.username || '').trim();
+
+    return customers.filter((customer) => {
+      const customerRep = (
+        customer.rep_name ||
+        customer.repName ||
+        customer.salesRepName ||
+        customer.representative_name ||
+        ''
+      ).toString().trim();
+
+      if (customerRep) {
+        if (customerRep === currentRep) return true;
+        if (currentRepUsername && customerRep === currentRepUsername) return true;
+        if (isArabicNameMatch(customerRep, currentRep)) return true;
+        if (currentRepUsername && isArabicNameMatch(customerRep, currentRepUsername)) return true;
+      }
+
+      return doesCustomerBelongToRep(customer, currentUser);
+    });
   };
 
   const getVisibleProducts = (): Product[] => {

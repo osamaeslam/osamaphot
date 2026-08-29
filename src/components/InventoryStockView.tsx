@@ -122,10 +122,14 @@ export const InventoryStockView: React.FC = () => {
   // Active branch context for stock resolution: specific user's branch for reps/supervisors/managers, or global filter for admin
   const currentActiveBranch = useMemo(() => {
     if (currentUser?.role === 'sales_rep' || currentUser?.role === 'supervisor' || currentUser?.role === 'branch_manager') {
-      return currentUser.branchName || 'فرع أكتوبر (الفرع الرئيسي والمخزن المركزي)';
+      if (currentUser.branchName && !currentUser.branchName.includes('الرئيسي') && !currentUser.branchName.includes('المركزي')) {
+        return currentUser.branchName;
+      }
     }
-    return selectedBranchFilter !== 'الكل' ? selectedBranchFilter : (currentUser?.branchName || '');
-  }, [currentUser, selectedBranchFilter]);
+    return selectedBranchFilter && selectedBranchFilter !== 'الكل' && !selectedBranchFilter.includes('الرئيسي')
+      ? selectedBranchFilter
+      : (branches[0]?.name || 'فرع القاهرة');
+  }, [currentUser, selectedBranchFilter, branches]);
 
   // Helper to get effective branch stock for a product for current viewer's branch
   const getProductBranchStock = (p: Product) => {
@@ -133,24 +137,8 @@ export const InventoryStockView: React.FC = () => {
   };
 
   // Filtered Products Matrix
-  const visibleBranch = currentUser && currentUser.role !== 'admin' && currentUser.role !== 'developer'
-    ? currentUser.branchName
-    : selectedBranchFilter;
-
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
-      // Operating-branch stock is scoped to the user's branch. October's central
-      // warehouse balance remains visible to everyone for availability and booking.
-      if (
-        visibleBranch !== 'الكل' &&
-        visibleBranch &&
-        p.branchName &&
-        p.branchName !== visibleBranch &&
-        p.mainWarehouseActual <= 0
-      ) {
-        return false;
-      }
-
       if (searchTerm.trim()) {
         const q = searchTerm.toLowerCase().trim();
         const match =
@@ -182,7 +170,7 @@ export const InventoryStockView: React.FC = () => {
 
       return true;
     });
-  }, [products, searchTerm, selectedCategory, stockLevelFilter, visibleBranch, currentActiveBranch]);
+  }, [products, searchTerm, selectedCategory, stockLevelFilter, currentActiveBranch]);
 
   // Paginated products
   const totalPages = Math.max(1, Math.ceil(filteredProducts.length / itemsPerPage));
@@ -440,11 +428,11 @@ export const InventoryStockView: React.FC = () => {
             </span>
           </div>
           <div className="mt-2">
-            <div className="text-[11px] text-slate-500 font-bold">يحتاج تحويل من أكتو��ر</div>
+            <div className="text-sm sm:text-base text-blue-950 font-black">طلب تحويل 🚚 — يحتاج تحويل من أكتوبر</div>
             <div className="text-xl sm:text-2xl font-black text-blue-950">
               {stockMetrics.needsTransferCount} <span className="text-xs font-bold text-slate-500">صنف</span>
             </div>
-            <div className="text-[10px] text-blue-800 font-semibold mt-0.5">عجز بالفرع ومتوفر بالمخزن ال��ئيسي</div>
+            <div className="text-[10px] text-blue-800 font-semibold mt-0.5">عجز بالفرع ومتوفر بالمخزن الرئيسي</div>
           </div>
         </div>
 
@@ -661,19 +649,20 @@ export const InventoryStockView: React.FC = () => {
               </div>
               {currentUser?.role === 'admin' || currentUser?.role === 'developer' ? (
                 <select
-                  value={selectedBranchFilter}
+                  value={currentActiveBranch}
                   onChange={(event) => setSelectedBranchFilter(event.target.value)}
-                  className="min-w-56 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                  className="min-w-56 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-amber-500 cursor-pointer"
                   aria-label="اختيار فرع المخزون"
                 >
-                  <option value="الكل">كل الفروع والمخزن الرئيسي</option>
-                  {branches.map((branch) => (
-                    <option key={branch.id} value={branch.name}>{branch.name}</option>
-                  ))}
+                  {branches
+                    .filter((branch) => !branch.isMainWarehouse && !branch.name.includes('المخزن المركزي') && !branch.name.includes('الفرع الرئيسي'))
+                    .map((branch) => (
+                      <option key={branch.id} value={branch.name}>{branch.name}</option>
+                    ))}
                 </select>
               ) : (
                 <span className="rounded-xl bg-amber-100 px-3 py-2 text-xs font-black text-amber-950">
-                  {currentUser?.branchName || 'الفرع المحدد بالحساب'}
+                  {currentActiveBranch || 'فرع القاهرة'}
                 </span>
               )}
               <span className="text-[11px] font-semibold text-slate-500">الفرع ثم المخزن الرئيسي عند اعتماد الطلبية</span>
@@ -984,7 +973,7 @@ export const InventoryStockView: React.FC = () => {
                   <thead className="bg-slate-900 text-white font-bold">
                     <tr>
                       <th className="p-3">الكود</th>
-                      <th className="p-3">اسم الصنف والبيان</th>
+                      <th className="p-3">��سم الصنف والبيان</th>
                       <th className="p-3 text-center">شدة الكرتونة</th>
                       <th className="p-3 text-center">المخزون بالفرع (المتاح)</th>
                       <th className="p-3 text-center">حالة التوافر والإجراء</th>

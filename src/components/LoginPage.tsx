@@ -69,7 +69,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onSuccess }) => {
         {/* Header Branding */}
         <div className="text-center mb-6">
           <div className="inline-flex items-center justify-center w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-white p-1 shadow-2xl shadow-amber-500/20 mb-3 border-2 border-amber-400">
-            <img src="/icon.svg" alt="Tantawy Group - مجموعة الطنطاوي" className="w-full h-full object-contain rounded-full" />
+            <img src="/tantawy-brand-logo.svg?v=3.1" alt="Tantawy Group - مجموعة الطنطاوي" className="w-full h-full object-contain rounded-full" />
           </div>
           <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center justify-center gap-2">
             <span>مجموعة الطنطاوي للتجارة والتوزيع</span>

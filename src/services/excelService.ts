@@ -710,13 +710,25 @@ export async function fetchAndParseGoogleSheet(googleSheetUrlOrId: string): Prom
 export function exportInvoiceToExcel(invoice: Invoice): void {
   const wb = XLSX.utils.book_new();
 
+  const debtBefore = invoice.customerBalanceBefore || 0;
+  const debtAfter = invoice.customerBalanceAfter || (debtBefore + invoice.estimatedGrandTotal);
+  const creditLimit = invoice.customerCreditLimit || 50000;
+  const isExceeded = invoice.creditLimitExceeded ?? (debtAfter > creditLimit);
+  const requiredDown = invoice.requiredDownPayment || (isExceeded ? debtAfter - creditLimit : 0);
+
   const titleRows = [
     ['مجموعة الطنطاوي - دريم للتجارة والتوزيع (TANTAWY GROUP)'],
-    ['فاتورة مبيعات إلكترونية معتمدة - بيان صرف واستلام بضاعة'],
+    ['فاتورة مبيعات إلكترونية معتمدة - بيان صرف واستلام بضاعة وموقف حساب العميل'],
     [`رقم الفاتورة: ${invoice.invoiceNumber}`, `التاريخ: ${invoice.date}`, `الوقت: ${invoice.time || ''}`, `طريقة السداد: ${invoice.paymentMethod}`],
     [`كود العميل: ${invoice.customerCode || '---'}`, `اسم العميل / المحل: ${invoice.customerName}`, `هاتف العميل: ${invoice.customerPhone || '---'}`, `الرقم الضريبي: ${invoice.customerTaxNumber || '---'}`],
     [`الفرع المنفذ: ${invoice.branchName}`, `المخزن المركزي: 6 أكتوبر`, `المندوب المسؤول: ${invoice.repName}`, `المشرف: ${invoice.supervisorName || '---'}`],
     [`حالة الفاتورة: ${invoice.status}`, `إجمالي الكراتين: ${invoice.totalCartons} كرتونة`, `إجمالي القطع: ${invoice.totalPieces} قطعة`, `نوع الاعتماد: صادر رسمي`],
+    [
+      `المديونية السابقة: ${debtBefore.toLocaleString()} ج.م`,
+      `الحد الائتماني المعتمد: ${creditLimit.toLocaleString()} ج.م`,
+      `إجمالي المديونية بعد الفاتورة: ${debtAfter.toLocaleString()} ج.م`,
+      isExceeded ? `⚠️ تجاوز الحد الائتماني (مطلوب سداد نقدي: ${requiredDown.toLocaleString()} ج.م)` : '✅ الحساب سليم وضمن الحد الائتماني'
+    ],
     []
   ];
 
@@ -780,6 +792,10 @@ export function exportInvoiceToExcel(invoice: Invoice): void {
     ['', '', '', '', '', '', '', '', '', '', 'إجمالي البضاعة قبل الخصم:', '', '', invoice.subtotal],
     ['', '', '', '', '', '', '', '', '', '', `إجمالي الخصم التجاري (${invoice.discountPercentage}%):`, '', '', -invoice.discountAmount],
     ['', '', '', '', '', '', '', '', '', '', 'الإجمالي النهائي المطلوب سداده:', '', '', invoice.estimatedGrandTotal],
+    ['', '', '', '', '', '', '', '', '', '', 'المديونية السابقة للعميل:', '', '', debtBefore],
+    ['', '', '', '', '', '', '', '', '', '', 'إجمالي مديونية العميل بعد الفاتورة:', '', '', debtAfter],
+    ['', '', '', '', '', '', '', '', '', '', 'الحد الائتماني المعتمد للعميل:', '', '', creditLimit],
+    ['', '', '', '', '', '', '', '', '', '', 'الدفعة النقدية المطلوب تحصيلها فوراً:', '', '', isExceeded ? requiredDown : 0],
     [],
     ['رسالة شكر وتقدير:', '✨ شكرًا لثقتكم بشركة دريم للتجارة والتوزيع - مجموعة الطنطاوي ❤️'],
     ['ملاحظات الفاتورة:', invoice.notes || 'بضاعة مستلمة بحالة جيدة'],
@@ -926,6 +942,12 @@ export function exportInvoiceForERP(invoice: Invoice): void {
   XLSX.utils.book_append_sheet(wb, wsItems, 'أصناف_الفاتورة_للسيستم_ERP');
 
   // Tab 2: Header Summary (Invoice Level)
+  const debtBefore = invoice.customerBalanceBefore || 0;
+  const debtAfter = invoice.customerBalanceAfter || (debtBefore + invoice.estimatedGrandTotal);
+  const creditLimit = invoice.customerCreditLimit || 50000;
+  const isExceeded = invoice.creditLimitExceeded ?? (debtAfter > creditLimit);
+  const requiredDown = invoice.requiredDownPayment || (isExceeded ? debtAfter - creditLimit : 0);
+
   const headerData = [
     ['رقم الفاتورة', invoice.invoiceNumber],
     ['التاريخ', `${invoice.date} ${invoice.time || ''}`],
@@ -936,6 +958,11 @@ export function exportInvoiceForERP(invoice: Invoice): void {
     ['هاتف العميل', invoice.customerPhone || ''],
     ['عنوان العميل', invoice.customerAddress || ''],
     ['الرقم الضريبي للعميل', invoice.customerTaxNumber || ''],
+    ['مديونية العميل السابقة', debtBefore],
+    ['إجمالي المديونية بعد الفاتورة', debtAfter],
+    ['الحد الائتماني المعتمد', creditLimit],
+    ['حالة الحد الائتماني', isExceeded ? '⚠️ تجاوز الحد الائتماني' : '✅ ضمن الحد المسموح'],
+    ['الدفعة النقدية المطلوب تحصيلها فوراً', isExceeded ? requiredDown : 0],
     ['إجمالي عدد الكراتين', invoice.totalCartons],
     ['إجمالي عدد القطع', invoice.totalPieces],
     ['إجمالي القيمة قبل الخصم', invoice.subtotal],
@@ -986,7 +1013,7 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
   const errors: string[] = [];
   const customers: Customer[] = [];
 
-  // Customer sheet priority columns: كود العميل | اسم العميل | الفرع التابع له | اسم المندوب
+  // Customer sheet priority columns: كود العميل | اسم العميل | الفرع التابع له | اسم المندوب | الحد الائتماني | المديونية
   const colMap: Record<string, number> = {
     code: -1,
     name: -1,
@@ -996,6 +1023,8 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
     address: -1,
     taxNumber: -1,
     tier: -1,
+    creditLimit: -1,
+    balance: -1,
     notes: -1,
   };
 
@@ -1004,35 +1033,93 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
     
     // 1. Check Sales Rep first (to prevent "اسم المندوب" from being captured as customer name)
     if (
-      norm.includes('مندوب') ||
+      norm.includes('اسمالمندوب') ||
+      norm.includes('اسمالبائع') ||
+      norm.includes('المندوبالمسؤول') ||
+      norm.includes('المندوبالمسئول') ||
+      norm.includes('مندوبالمبيعات') ||
+      norm.includes('مسؤولالمبيعات') ||
+      norm.includes('مسئولالمبيعات') ||
+      norm.includes('مسوولالمبيعات') ||
+      norm.includes('مندوبالبيع') ||
+      norm.includes('كودالمندوب') ||
       norm.includes('المندوب') ||
-      norm.includes('rep') ||
-      norm.includes('sales') ||
+      norm.includes('مندوب') ||
       norm.includes('بائع') ||
-      norm.includes('مسؤول') ||
-      norm.includes('مسئول') ||
-      norm.includes('مسوول') ||
-      norm.includes('اسمالمندوب')
+      norm.includes('الموزع') ||
+      norm.includes('موزع') ||
+      norm.includes('salesrep') ||
+      norm.includes('representative') ||
+      norm.includes('repname') ||
+      norm === 'rep'
     ) {
       if (colMap.repName === -1) colMap.repName = idx;
     }
     // 2. Check Branch
-    else if (norm.includes('فرع') || norm.includes('branch')) {
+    else if (norm.includes('فرع') || norm.includes('branch') || norm.includes('الفرع')) {
       if (colMap.branchName === -1) colMap.branchName = idx;
     }
     // 3. Check Customer Code
     else if (
+      norm.includes('كودالعميل') ||
+      norm.includes('رقم العميل') ||
+      norm.includes('رقم المحل') ||
+      norm.includes('كودالمحل') ||
       norm.includes('كود') ||
       norm.includes('code') ||
-      norm.includes('رقم العميل') ||
-      norm.includes('كودالعميل') ||
       norm.includes('cust_id') ||
-      norm.includes('custid')
+      norm.includes('custid') ||
+      norm.includes('customercode')
     ) {
       if (colMap.code === -1) colMap.code = idx;
     }
-    // 4. Check Customer Name
+    // 4. Check Credit Limit (الحد الائتماني)
     else if (
+      norm.includes('حدائتمان') ||
+      norm.includes('الحدالائتماني') ||
+      norm.includes('الحدالائتمانى') ||
+      norm.includes('الحدالمسموح') ||
+      norm.includes('سقفالائتمان') ||
+      norm.includes('الائتمانالمعتمد') ||
+      norm.includes('حدالائتمان') ||
+      norm.includes('ائتمان') ||
+      norm.includes('creditlimit') ||
+      norm.includes('credit')
+    ) {
+      if (colMap.creditLimit === -1) colMap.creditLimit = idx;
+    }
+    // 5. Check Balance / Debt (المديونية / الرصيد السابق)
+    else if (
+      norm.includes('المديونيةالسابقة') ||
+      norm.includes('المديونيهالسابقه') ||
+      norm.includes('المديونيةالحالية') ||
+      norm.includes('المديونيهالحاليه') ||
+      norm.includes('مديونيةسابقة') ||
+      norm.includes('مديونيهسابقه') ||
+      norm.includes('المديونية') ||
+      norm.includes('المديونيه') ||
+      norm.includes('مديونية') ||
+      norm.includes('مديونيه') ||
+      norm.includes('الرصيدالافتتاحي') ||
+      norm.includes('رصيدالعميل') ||
+      norm.includes('رصيدسابق') ||
+      norm.includes('حسابالعميل') ||
+      norm.includes('الرصيد') ||
+      norm.includes('رصيد') ||
+      norm.includes('currentbalance') ||
+      norm.includes('prevbalance') ||
+      norm.includes('previousbalance') ||
+      norm.includes('balance') ||
+      norm.includes('debt')
+    ) {
+      if (colMap.balance === -1) colMap.balance = idx;
+    }
+    // 6. Check Customer Name
+    else if (
+      norm.includes('اسمالعميل') ||
+      norm.includes('اسمالمحل') ||
+      norm.includes('اسمالتاجر') ||
+      norm.includes('اسمالزبون') ||
       norm.includes('عميل') ||
       norm.includes('محل') ||
       norm.includes('تاجر') ||
@@ -1044,7 +1131,7 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
     ) {
       if (colMap.name === -1) colMap.name = idx;
     }
-    // 5. Optional extra fields
+    // 7. Optional extra fields
     else if (
       norm.includes('تليفون') ||
       norm.includes('هاتف') ||
@@ -1149,6 +1236,27 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
       ? `cust-${cleanCode.replace(/\s+/g, '_')}`
       : `cust-${cleanName.replace(/\s+/g, '_').slice(0, 30)}_${cleanPhone || r}`;
 
+    // Parse credit limit and current balance / debt
+    const parseNumberValue = (colIdx: number): number | undefined => {
+      if (colIdx === -1) return undefined;
+      let valStr = getVal(row, colIdx);
+      if (!valStr) return undefined;
+      const arabicNumerals = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+      for (let i = 0; i < 10; i++) {
+        valStr = valStr.split(arabicNumerals[i]).join(String(i));
+      }
+      valStr = valStr.replace(/,/g, '').replace(/٬/g, '').replace(/٫/g, '.');
+      const clean = valStr.replace(/[^\d.-]/g, '');
+      if (!clean) return undefined;
+      const parsed = parseFloat(clean);
+      return isNaN(parsed) ? undefined : parsed;
+    };
+
+    const parsedCredit = parseNumberValue(colMap.creditLimit);
+    const parsedBalance = parseNumberValue(colMap.balance);
+    const finalCreditLimit = parsedCredit !== undefined ? parsedCredit : 0;
+    const finalBalance = parsedBalance !== undefined ? parsedBalance : 0;
+
     const existing = customerMap.get(dedupKey);
 
     if (existing) {
@@ -1157,11 +1265,16 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
       if (!existing.address && rawAddress) existing.address = rawAddress;
       if (!existing.taxNumber && rawTax) existing.taxNumber = rawTax;
       if (!existing.notes && rawNotes) existing.notes = rawNotes;
-      if (rawRep) {
-        existing.repName = rawRep;
-        existing.salesRepName = rawRep;
+      if (parsedCredit !== undefined) existing.creditLimit = parsedCredit;
+      if (parsedBalance !== undefined) {
+        existing.currentBalance = parsedBalance;
+        existing.balance = parsedBalance;
       }
-      if (rawBranch) {
+      if (rawRep && rawRep.trim()) {
+        existing.repName = rawRep.trim();
+        existing.salesRepName = rawRep.trim();
+      }
+      if (rawBranch && rawBranch.trim()) {
         existing.branchName = normalizeExcelBranchName(rawBranch);
       }
       if (tier === 'مميز' || (tier === 'راقي' && existing.tier === 'متوسط')) {
@@ -1176,9 +1289,14 @@ export function parseRawRowsToCustomers(rawRows: any[]): {
         tier: tier,
         phone: rawPhone,
         address: rawAddress,
+        creditLimit: finalCreditLimit,
+        currentBalance: finalBalance,
+        balance: finalBalance,
         branchName: normalizeExcelBranchName(rawBranch),
-        repName: rawRep || '',
-        salesRepName: rawRep || '',
+        rep_name: rawRep ? rawRep.trim() : '',
+        repName: rawRep ? rawRep.trim() : '',
+        salesRepName: rawRep ? rawRep.trim() : '',
+        representative_name: rawRep ? rawRep.trim() : '',
         taxNumber: rawTax,
         notes: rawNotes,
         createdAt: new Date().toISOString(),
@@ -1444,14 +1562,23 @@ export function generateSampleCustomersTemplate(): void {
 export function exportCustomersToExcel(customers: Customer[]): void {
   const wb = XLSX.utils.book_new();
 
-  const headers = ['كود العميل', 'اسم العميل', 'الفرع التابع له', 'اسم المندوب'];
+  const headers = ['كود العميل', 'اسم العميل / المحل', 'الفرع التابع له', 'اسم المندوب', 'رقم الهاتف', 'الحد الائتماني (ج.م)', 'المديونية الحالية (ج.م)', 'المتبقي من الحد الائتماني (ج.م)'];
 
-  const rows = customers.map(c => [
-    c.code,
-    c.name,
-    c.branchName,
-    c.repName || c.salesRepName || ''
-  ]);
+  const rows = customers.map(c => {
+    const limit = c.creditLimit || 50000;
+    const balance = c.currentBalance || 0;
+    const available = Math.max(0, limit - balance);
+    return [
+      c.code,
+      c.name,
+      c.branchName,
+      c.repName || c.salesRepName || '',
+      c.phone || '',
+      limit,
+      balance,
+      available
+    ];
+  });
 
   const data = [headers, ...rows];
   const ws = XLSX.utils.aoa_to_sheet(data);
@@ -1459,12 +1586,12 @@ export function exportCustomersToExcel(customers: Customer[]): void {
   ws['!cols'] = [
     { wch: 14 },
     { wch: 32 },
+    { wch: 22 },
+    { wch: 22 },
     { wch: 16 },
-    { wch: 30 },
     { wch: 20 },
     { wch: 20 },
-    { wch: 18 },
-    { wch: 25 }
+    { wch: 24 }
   ];
 
   XLSX.utils.book_append_sheet(wb, ws, 'قاعدة_بيانات_العملاء');

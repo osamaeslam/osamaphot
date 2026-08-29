@@ -230,6 +230,12 @@ CREATE TABLE IF NOT EXISTS public.customers (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- تنظيف المسافات الزائدة لاسم المندوب والفرع لضمان التطابق التام
+UPDATE public.customers
+SET rep_name = TRIM(rep_name),
+    branch_name = TRIM(branch_name)
+WHERE rep_name IS NOT NULL OR branch_name IS NOT NULL;
+
 -- تفعيل التحديث اللحظي (Realtime)
 ALTER PUBLICATION supabase_realtime ADD TABLE public.invoices;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.products;
