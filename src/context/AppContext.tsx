@@ -827,35 +827,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updated.representative_name ||
         ''
       ).toString().trim();
-      if ((!rawRep || rawRep === 'مندوب المبيعات' || rawRep === 'المندوب') && !updated.repId) {
-        return updated;
+
+      const isGeneric =
+        !rawRep ||
+        rawRep === 'مندوب المبيعات' ||
+        rawRep === 'المندوب' ||
+        rawRep === 'مندوب' ||
+        rawRep === 'مبيعات' ||
+        rawRep === '---' ||
+        rawRep === '..' ||
+        rawRep.toLowerCase() === 'unassigned' ||
+        rawRep.toLowerCase() === 'none';
+
+      // If customer has no specific individual rep in sheet or record:
+      if (isGeneric) {
+        // Clear any invalid repId so generic branch customers do not hijack one single user
+        return {
+          ...updated,
+          repId: undefined,
+          rep_name: 'مندوب المبيعات',
+          repName: 'مندوب المبيعات',
+          salesRepName: 'مندوب المبيعات',
+          representative_name: 'مندوب المبيعات',
+          creditLimit: updated.creditLimit !== undefined ? Number(updated.creditLimit) : 0,
+          currentBalance: Number(updated.currentBalance ?? updated.balance ?? 0),
+          balance: Number(updated.currentBalance ?? updated.balance ?? 0),
+        };
       }
 
-      // Check if candidate matches rep in same branch, or overall
+      // Check if candidate matches rep in same branch
       const matchFn = (u: User) => {
         const uName = (u.name || '').trim();
         const uUsername = (u.username || '').trim();
-        return (
-          (updated.repId && u.id === updated.repId) ||
-          rawRep === uName ||
-          (uUsername && rawRep === uUsername) ||
-          doesCustomerBelongToRep(updated, u) ||
-          isArabicNameMatch(rawRep, uName) ||
-          (uUsername && isArabicNameMatch(rawRep, uUsername)) ||
-          (u.phone && (rawRep.includes(u.phone.trim()) || u.phone.trim().includes(rawRep))) ||
-          normalizeArabicText(rawRep).includes(normalizeArabicText(uName)) ||
-          normalizeArabicText(uName).includes(normalizeArabicText(rawRep))
-        );
+
+        // Exact ID match
+        if (updated.repId && u.id === updated.repId) return true;
+
+        // Exact Name Match
+        if (rawRep === uName) return true;
+        if (uUsername && rawRep === uUsername) return true;
+
+        // Exact phone match
+        const cleanRawRepPhone = rawRep.replace(/\D/g, '');
+        const cleanUserPhone = (u.phone || '').replace(/\D/g, '');
+        if (cleanUserPhone.length >= 8 && cleanRawRepPhone === cleanUserPhone) return true;
+
+        // Strict Arabic tokenized match (e.g. "حسن محمد" matches "حسن محمد")
+        if (isArabicNameMatch(rawRep, uName)) return true;
+        if (uUsername && isArabicNameMatch(rawRep, uUsername)) return true;
+
+        return false;
       };
 
       const branchCompatibleReps = updated.branchName
         ? reps.filter((u) => u.branchName && isBranchMatch(updated.branchName, u.branchName, { allowUnassigned: false }))
-        : [];
+        : reps;
 
       let matched = branchCompatibleReps.find(matchFn);
-      if (!matched) {
-        matched = reps.find(matchFn);
-      }
 
       if (matched) {
         return {
@@ -865,18 +893,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           repId: matched.id,
           salesRepName: matched.name.trim(),
           representative_name: matched.name.trim(),
-          branchName: matched.branchName || updated.branchName || 'فرع القاهرة',
+          branchName: matched.branchName || updated.branchName || 'الفرع الرئيسي',
+          creditLimit: updated.creditLimit !== undefined ? Number(updated.creditLimit) : 0,
+          currentBalance: Number(updated.currentBalance ?? updated.balance ?? 0),
+          balance: Number(updated.currentBalance ?? updated.balance ?? 0),
+        };
+      } else {
+        // If it does NOT match any user, remove false repId
+        return {
+          ...updated,
+          repId: undefined,
           creditLimit: updated.creditLimit !== undefined ? Number(updated.creditLimit) : 0,
           currentBalance: Number(updated.currentBalance ?? updated.balance ?? 0),
           balance: Number(updated.currentBalance ?? updated.balance ?? 0),
         };
       }
-      return {
-        ...updated,
-        creditLimit: updated.creditLimit !== undefined ? Number(updated.creditLimit) : 0,
-        currentBalance: Number(updated.currentBalance ?? updated.balance ?? 0),
-        balance: Number(updated.currentBalance ?? updated.balance ?? 0),
-      };
     });
   };
 

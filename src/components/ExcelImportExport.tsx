@@ -48,6 +48,7 @@ import {
   parseExcelProducts
 } from '../services/excelService';
 import { formatCurrency } from '../services/invoiceService';
+import { doesCustomerBelongToRep } from '../services/arabicMatchingService';
 import { Customer, Product } from '../types';
 
 export const ExcelImportExport: React.FC = () => {
@@ -1329,15 +1330,9 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                   {users
                     .filter((u) => u.role === 'sales_rep' || u.role === 'supervisor')
                     .map((rep) => {
-                      const repCustomerCount = customers.filter(
-                        (c) =>
-                          c.repId === rep.id ||
-                          c.salesRepName === rep.name ||
-                          c.repName === rep.name ||
-                          (c.salesRepName && c.salesRepName.includes(rep.name))
-                      ).length;
+                      const repCustomerCount = customers.filter((c) => doesCustomerBelongToRep(c, rep)).length;
                       return (
-                        <option key={rep.id} value={rep.name}>
+                        <option key={rep.id} value={rep.id}>
                           مندوب: {rep.name} {rep.branchName ? `(${rep.branchName})` : ''} - [{repCustomerCount} عميل]
                         </option>
                       );
@@ -1401,14 +1396,11 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                         // Rep Filter
                         if (customerSelectedRepFilter !== 'all') {
                           if (customerSelectedRepFilter === 'unassigned') {
-                            if (c.repId || c.salesRepName || c.repName) return false;
+                            const isAssigned = users.some((u) => doesCustomerBelongToRep(c, u));
+                            if (isAssigned) return false;
                           } else {
-                            const repMatch =
-                              c.repName === customerSelectedRepFilter ||
-                              c.salesRepName === customerSelectedRepFilter ||
-                              (c.salesRepName && c.salesRepName.includes(customerSelectedRepFilter)) ||
-                              (c.repName && c.repName.includes(customerSelectedRepFilter));
-                            if (!repMatch) return false;
+                            const targetRep = users.find((u) => u.id === customerSelectedRepFilter || u.name === customerSelectedRepFilter);
+                            if (!targetRep || !doesCustomerBelongToRep(c, targetRep)) return false;
                           }
                         }
 
@@ -1452,14 +1444,16 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                               <td className="p-3">
                                 {/* Inline Rep Selector */}
                                 <select
-                                  value={c.salesRepName || c.repName || ''}
+                                  value={c.repId || (users.find((u) => doesCustomerBelongToRep(c, u))?.id || '')}
                                   onChange={(e) => {
-                                    const selectedRepName = e.target.value;
-                                    const matchedUser = users.find((u) => u.name === selectedRepName);
+                                    const selectedRepId = e.target.value;
+                                    const matchedUser = users.find((u) => u.id === selectedRepId);
                                     updateCustomer({
                                       ...c,
-                                      salesRepName: selectedRepName || undefined,
-                                      repName: selectedRepName || undefined,
+                                      salesRepName: matchedUser ? matchedUser.name : 'مندوب المبيعات',
+                                      repName: matchedUser ? matchedUser.name : 'مندوب المبيعات',
+                                      rep_name: matchedUser ? matchedUser.name : 'مندوب المبيعات',
+                                      representative_name: matchedUser ? matchedUser.name : 'مندوب المبيعات',
                                       repId: matchedUser ? matchedUser.id : undefined,
                                       branchName: c.branchName || matchedUser?.branchName || undefined,
                                     });
@@ -1467,11 +1461,11 @@ function processFolderRecursive(folder, sheet, currentPath, startTime, timeLimit
                                   aria-label={`تحديد مندوب العميل ${c.name}`}
                                   className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                                 >
-                                  <option value="">-- غير محدد --</option>
+                                  <option value="">-- غير محدد (عام بالفرع) --</option>
                                   {users
                                     .filter((u) => u.role === 'sales_rep' || u.role === 'supervisor')
                                     .map((u) => (
-                                      <option key={u.id} value={u.name}>
+                                      <option key={u.id} value={u.id}>
                                         {u.name} {u.branchName ? `(${u.branchName})` : ''}
                                       </option>
                                     ))}

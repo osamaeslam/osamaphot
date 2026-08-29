@@ -55,7 +55,6 @@ import {
   buildGoogleDriveCompressedUrls
 } from '../services/cloudinaryService';
 import { formatCurrency } from '../services/invoiceService';
-import { cacheProductImages, getCachedImagesStats, clearCachedImages } from '../services/imageCacheService';
 import { parseExcelProducts, fetchAndParseGoogleSheet, generateSampleExcelTemplate } from '../services/excelService';
 import { ItemStatus, OFFICIAL_DEPARTMENTS, Product, SalesPriority } from '../types';
 import { DepartmentCategorySlicer } from './DepartmentCategorySlicer';
@@ -116,11 +115,6 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
   // Per-card ordering state (custom quantity and carton vs piece toggle)
   const [cardOrderState, setCardOrderState] = useState<Record<string, { type: 'carton' | 'piece'; quantity: number }>>({});
 
-  // Cache stats state for phone bandwidth saving
-  const [cacheStats, setCacheStats] = useState<{ count: number; estimatedSizeMB: number }>({ count: 0, estimatedSizeMB: 0 });
-  const [isCaching, setIsCaching] = useState(false);
-  const [cacheProgressText, setCacheProgressText] = useState('');
-
   // Pagination & Progressive Loading state to avoid network choke and high data consumption
   const [itemsPerPage, setItemsPerPage] = useState<number | 'all'>(16);
   const [currentPage, setCurrentPage] = useState(1);
@@ -139,39 +133,11 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
     sortBy
   ]);
 
-  useEffect(() => {
-    getCachedImagesStats().then(setCacheStats);
-  }, [products]);
-
-  const handleCacheAllImages = async () => {
-    setIsCaching(true);
-    setCacheProgressText('جاري فحص وضغط وحفظ صور الكتالوج في ذاكرة الهاتف...');
-    
-    // Gather all candidate image URLs with compressed size parameter (s=200)
-    const allUrls: string[] = [];
-    products.forEach(p => {
-      const urls = getCandidateImageUrls(p, cloudinaryConfig);
-      if (urls.length > 0) {
-        // Optimize to 200px thumbnail for offline cache
-        allUrls.push(optimizeImageUrl(urls[0], 200, true));
-      }
-    });
-
-    const res = await cacheProductImages(allUrls);
-    const updatedStats = await getCachedImagesStats();
-    setCacheStats(updatedStats);
-    setIsCaching(false);
-    setCacheProgressText(`تم حفظ ${res.cached} صورة بنجاح في ذاكرة الهاتف! لن يتم استهلاك أي باقة عند فتحها.`);
-    setTimeout(() => setCacheProgressText(''), 4000);
-  };
-
   // Wipe all data and images so user can upload from scratch
   const handleConfirmWipe = async () => {
     setIsWiping(true);
     try {
       await wipeAllProductsAndData({ wipeInvoices: wipeInvoicesToo });
-      const stats = await getCachedImagesStats();
-      setCacheStats(stats);
       setIsWipeModalOpen(false);
       setIsUploadBoxOpen(true);
       setWipeSuccessText('تم مسح جميع الأصناف والصور بنجاح! يمكنك الآن رفع ملفك من الصفر.');
@@ -615,65 +581,6 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ onOpenCart }) =>
         <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-800 text-xs rounded-xl font-bold flex items-center gap-2 animate-in fade-in">
           <CheckCheck className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>{wipeSuccessText}</span>
-        </div>
-      )}
-
-      {/* Offline Image Cache & Data-Saver Bar (Works 100% Offline with Zero Data Consumption) */}
-      <div className="bg-gradient-to-r from-amber-500/10 via-emerald-500/10 to-slate-100 border border-amber-300/60 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-black shrink-0 shadow-xs">
-            <Download className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h4 className="text-xs sm:text-sm font-black text-slate-900">
-                العمل بدون إنترنت (توفير الباقة وسرعة العرض للمناديب)
-              </h4>
-              <span className="bg-emerald-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
-                Offline Mode ⚡
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-600 mt-0.5">
-              اضغط زر التحميل لحفظ صور الأصناف بضغط فائق (حجم خفيف جداً) لعرضها على العملاء في أي مكان بدون شبكة وبدون استهلاك باقة الإنترنت.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 w-full sm:w-auto shrink-0 justify-between sm:justify-end">
-          <div className="text-right sm:text-left text-[11px] font-bold text-slate-700">
-            <span>المحفوظ بالجهاز: </span>
-            <strong className="text-emerald-700 font-black">{cacheStats.count} صورة</strong>
-            {cacheStats.estimatedSizeMB > 0 && (
-              <span className="text-[10px] text-slate-500 block sm:inline"> (~{cacheStats.estimatedSizeMB} ميجابايت فقط)</span>
-            )}
-          </div>
-
-          <button
-            onClick={handleCacheAllImages}
-            disabled={isCaching || products.length === 0}
-            className="bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-amber-300 font-black px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow transition cursor-pointer active:scale-95"
-            title="تحميل وضغط كل صور الأصناف للعمل بدون إنترنت"
-          >
-            {isCaching ? (
-              <>
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
-                <span>جاري الحفظ ({products.length})...</span>
-              </>
-            ) : (
-              <>
-                <Download className="w-3.5 h-3.5 text-amber-400" />
-                <span>تحميل الصور أوفلاين 📲</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Cache Progress Notification */}
-      {cacheProgressText && (
-        <div className="p-3 bg-emerald-500 text-white text-xs rounded-xl font-bold flex items-center gap-2 shadow-md animate-in fade-in">
-          <CheckCheck className="w-4 h-4 text-emerald-200 shrink-0" />
-          <span>{cacheProgressText}</span>
         </div>
       )}
 

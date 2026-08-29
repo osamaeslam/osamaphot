@@ -139,20 +139,15 @@ export function getArabicTokens(str?: string): string[] {
 
 /**
  * Intelligent Arabic Name Matcher
- * Handles exact matches, token overlap, prefix/suffix names (e.g. "يحيى عبد الفتاح" vs "يحيي عبدالفتاح"),
- * compound names, titles/honorifics stripping, and fuzzy Arabic variations.
+ * Strictly compares Arabic names by token equality and normalized Arabic representations.
+ * Prevents false positive matching between different individuals (e.g. "حسن محمد" will NOT match "محمد علي" or "أحمد محمد").
  */
 export function isArabicNameMatch(nameA?: string, nameB?: string): boolean {
   if (!nameA || !nameB) return false;
-  const normA = normalizeArabicText(nameA);
-  const normB = normalizeArabicText(nameB);
+  const normA = normalizeCompoundNames(normalizeArabicText(nameA));
+  const normB = normalizeCompoundNames(normalizeArabicText(nameB));
   if (!normA || !normB) return false;
   if (normA === normB) return true;
-
-  // Direct containment check (e.g. "يحيي عبدالفتاح" inside "مندوب يحيى عبد الفتاح - المنيا")
-  if (normA.includes(normB) || normB.includes(normA)) {
-    return true;
-  }
 
   const tokensA = getArabicTokens(nameA);
   const tokensB = getArabicTokens(nameB);
@@ -162,53 +157,28 @@ export function isArabicNameMatch(nameA?: string, nameB?: string): boolean {
   const joinedB = tokensB.join(' ');
   if (joinedA === joinedB) return true;
 
-  // If one full tokenized string starts with or contains the other
-  if (joinedA.length >= 3 && joinedB.length >= 3) {
-    if (
-      joinedA.startsWith(joinedB) ||
-      joinedB.startsWith(joinedA) ||
-      joinedA.includes(joinedB) ||
-      joinedB.includes(joinedA)
-    ) {
-      return true;
+  // If one name has single token, it can ONLY match if both have single token and they are identical
+  if (tokensA.length === 1 || tokensB.length === 1) {
+    if (tokensA.length === 1 && tokensB.length === 1) {
+      return tokensA[0] === tokensB[0];
     }
+    // A single word like "محمد" or "حسن" does NOT match a full composite name "حسن محمد"
+    return false;
   }
 
-  // Token matching heuristics
-  const [shorter, longer] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA];
-  const longerSet = new Set(longer);
-
-  // If all tokens of shorter name exist in longer name (e.g. "يحيى عبدالفتاح" in "يحيى عبد الفتاح طنطاوي")
-  const allShorterMatch = shorter.every((t) => longerSet.has(t));
-  if (allShorterMatch) {
-    return true;
+  // Both have at least 2 tokens (First name + Father's name / Family name)
+  // 1. First name MUST match exactly in order
+  if (tokensA[0] !== tokensB[0]) {
+    return false;
   }
 
-  // First name (first token) match check
-  const firstMatch = tokensA[0] === tokensB[0];
-  if (firstMatch) {
-    // If one of them has only 1 token (e.g. "يحيى" matching "يحيى عبد الفتاح")
-    if (tokensA.length === 1 || tokensB.length === 1) {
-      return true;
-    }
-    // If both have >= 2 tokens and share second token as well
-    if (tokensA[1] === tokensB[1]) {
-      return true;
-    }
-    // Count shared tokens
-    const sharedCount = shorter.filter((t) => longerSet.has(t)).length;
-    if (sharedCount >= 2 || (sharedCount >= 1 && shorter.length <= 2)) {
-      return true;
-    }
+  // 2. Second name MUST match exactly in order
+  if (tokensA[1] !== tokensB[1]) {
+    return false;
   }
 
-  // Check if >= 2 distinctive tokens match anywhere in the name
-  const sharedTokens = shorter.filter((t) => longerSet.has(t));
-  if (sharedTokens.length >= 2) {
-    return true;
-  }
-
-  return false;
+  // 3. If one has 2 tokens and the other has >= 2 tokens with the same first 2 tokens (e.g. "حسن محمد" and "حسن محمد طنطاوي")
+  return true;
 }
 
 /**
@@ -593,9 +563,20 @@ export function isBranchMatch(
 export function doesCustomerBelongToRep(customer: Customer, repUser: User): boolean {
   if (!repUser) return false;
 
+  // Branch check: If customer and rep both have branches specified, they MUST match
+  if (repUser.branchName && customer.branchName) {
+    if (!isBranchMatch(customer.branchName, repUser.branchName, { allowUnassigned: false })) {
+      return false;
+    }
+  }
+
   // 1. Direct ID match (Highest authority)
-  if (customer.repId && customer.repId.trim() && customer.repId.trim() === (repUser.id || '').trim()) {
-    return true;
+  if (customer.repId && customer.repId.trim()) {
+    if (customer.repId.trim() === (repUser.id || '').trim()) {
+      return true;
+    }
+    // Explicitly assigned to a different rep ID
+    return false;
   }
 
   // 2. Direct Match by rep_name / repName / salesRepName / representative_name
@@ -618,46 +599,40 @@ export function doesCustomerBelongToRep(customer: Customer, repUser: User): bool
     repField.toLowerCase() === 'unassigned' ||
     repField.toLowerCase() === 'none';
 
-  if (!isGenericRep) {
-    // If the customer has a specified branch, it MUST match the sales rep's branch
-    if (repUser.branchName && customer.branchName) {
-      if (!isBranchMatch(customer.branchName, repUser.branchName, { allowUnassigned: false })) {
-        return false;
-      }
-    }
-
-    const currentRepName = (repUser.name || '').trim();
-    const currentRepUsername = (repUser.username || '').trim();
-
-    // Exact trimmed equality
-    if (repField === currentRepName) return true;
-    if (currentRepUsername && repField === currentRepUsername) return true;
-
-    // Exact or normalized Arabic match
-    if (isArabicNameMatch(repField, currentRepName)) return true;
-    if (currentRepUsername && isArabicNameMatch(repField, currentRepUsername)) return true;
-    if (repUser.phone && (repField.includes(repUser.phone.trim()) || repUser.phone.trim().includes(repField))) return true;
-
-    const normRepField = normalizeArabicText(repField);
-    const normUserName = normalizeArabicText(currentRepName);
-
-    if (normRepField && normUserName) {
-      if (normRepField === normUserName) return true;
-      if (normRepField.includes(normUserName) || normUserName.includes(normRepField)) {
-        return true;
-      }
-    }
-
-    const repFieldWords = normRepField.split(' ').filter(Boolean);
-    const repNameWords = normUserName.split(' ').filter(Boolean);
-    const sharedNameWords = repNameWords.filter((word) => repFieldWords.includes(word));
-    if (repNameWords.length >= 2 && sharedNameWords.length >= 2) return true;
-
-    // Not matching this rep
+  if (isGenericRep) {
     return false;
   }
 
-  // If rep is generic / unassigned in sheet, it does not strictly belong to this individual sales rep
+  const currentRepName = (repUser.name || '').trim();
+  const currentRepUsername = (repUser.username || '').trim();
+
+  // Exact trimmed equality
+  if (repField === currentRepName) return true;
+  if (currentRepUsername && repField === currentRepUsername) return true;
+
+  // Phone match (if exact phone digits match)
+  const cleanRepFieldPhone = repField.replace(/\D/g, '');
+  const cleanUserPhone = (repUser.phone || '').replace(/\D/g, '');
+  if (cleanUserPhone.length >= 8 && cleanRepFieldPhone === cleanUserPhone) {
+    return true;
+  }
+
+  // Exact normalized match
+  const normRepField = normalizeCompoundNames(normalizeArabicText(repField));
+  const normUserName = normalizeCompoundNames(normalizeArabicText(currentRepName));
+  const normUsername = normalizeArabicText(currentRepUsername);
+
+  if (normRepField && normUserName && normRepField === normUserName) {
+    return true;
+  }
+  if (normUsername && normRepField === normUsername) {
+    return true;
+  }
+
+  // Strict Arabic multi-token match
+  if (isArabicNameMatch(repField, currentRepName)) return true;
+  if (currentRepUsername && isArabicNameMatch(repField, currentRepUsername)) return true;
+
   return false;
 }
 

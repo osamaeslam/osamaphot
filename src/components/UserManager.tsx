@@ -56,11 +56,14 @@ export const UserManager: React.FC = () => {
     getSupervisorsInBranch,
     loginAs,
     refreshCustomerRepLinks,
+    updateCustomer,
   } = useApp();
 
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [copiedCredentials, setCopiedCredentials] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [selectedUserForCustomers, setSelectedUserForCustomers] = useState<User | null>(null);
+  const [customerModalSearch, setCustomerModalSearch] = useState<string>('');
   const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>('الكل');
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('الكل');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -700,9 +703,17 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                   {user.role === 'sales_rep' && (
                     <div className="flex justify-between items-center">
                       <span className="text-slate-400">العملاء المسندين:</span>
-                      <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2 py-0.5 rounded text-[10px]">
-                        👥 {customers.filter((c) => doesCustomerBelongToRep(c, user)).length} عميل
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedUserForCustomers(user);
+                          setCustomerModalSearch('');
+                        }}
+                        className="bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300 font-bold px-2 py-0.5 rounded text-[10px] cursor-pointer flex items-center gap-1"
+                      >
+                        <span>👥 {customers.filter((c) => doesCustomerBelongToRep(c, user)).length} عميل</span>
+                        <span className="text-[9px] bg-emerald-200 px-1 rounded">إدارة</span>
+                      </button>
                     </div>
                   )}
                   {user.role === 'sales_rep' && (
@@ -827,9 +838,19 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
                       <div className="font-bold text-slate-800">{user.branchName}</div>
                       {user.role === 'sales_rep' && (
                         <div className="mt-1">
-                          <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-850 border border-emerald-200 px-2 py-0.5 rounded-lg text-[10px] font-bold">
-                            👥 {customers.filter((c) => doesCustomerBelongToRep(c, user)).length} عميل مسند
-                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedUserForCustomers(user);
+                              setCustomerModalSearch('');
+                            }}
+                            className="inline-flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-850 border border-emerald-300 hover:border-emerald-400 px-2.5 py-1 rounded-lg text-[11px] font-black transition cursor-pointer active:scale-95 shadow-2xs"
+                            title="عرض وتعديل وتخصيص عملاء هذا المندوب"
+                          >
+                            <Users className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>{customers.filter((c) => doesCustomerBelongToRep(c, user)).length} عميل مسند</span>
+                            <span className="text-[9px] bg-emerald-200 text-emerald-900 px-1 py-0.2 rounded font-bold">إدارة</span>
+                          </button>
                         </div>
                       )}
                     </td>
@@ -1273,6 +1294,224 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.users;`;
               >
                 <Check className="w-4 h-4" />
                 <span>اعتماد وتفعيل الحساب فوراً</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Customer Assignment & Management Modal for Selected Sales Rep */}
+      {selectedUserForCustomers && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white border border-slate-200 rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="p-4 sm:p-5 bg-gradient-to-r from-amber-500/15 via-emerald-500/10 to-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black shrink-0 shadow-xs">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-black text-slate-900">
+                      إدارة عملاء المندوب: {selectedUserForCustomers.name}
+                    </h3>
+                    <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full border border-emerald-200">
+                      {customers.filter((c) => doesCustomerBelongToRep(c, selectedUserForCustomers)).length} عميل مسند
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    الفرع: <strong className="text-slate-800 font-bold">{selectedUserForCustomers.branchName}</strong> • كود الموظف: {selectedUserForCustomers.username}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedUserForCustomers(null)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition cursor-pointer"
+                title="إغلاق"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Search & Actions Bar */}
+            <div className="p-3 sm:p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-2.5">
+              <div className="relative w-full sm:w-72">
+                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={customerModalSearch}
+                  onChange={(e) => setCustomerModalSearch(e.target.value)}
+                  placeholder="بحث في عملاء المندوب..."
+                  className="w-full bg-white border border-slate-200 rounded-xl pr-9 pl-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500 shadow-2xs"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                {customers.filter((c) => doesCustomerBelongToRep(c, selectedUserForCustomers)).length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm(`هل أنت متأكد من إلغاء إسناد كافة عملاء المندوب "${selectedUserForCustomers.name}" وجعلهم عملاء عامين بالفرع؟`)) {
+                        const repCusts = customers.filter((c) => doesCustomerBelongToRep(c, selectedUserForCustomers));
+                        repCusts.forEach((c) => {
+                          updateCustomer({
+                            ...c,
+                            repId: undefined,
+                            rep_name: 'مندوب المبيعات',
+                            repName: 'مندوب المبيعات',
+                            salesRepName: 'مندوب المبيعات',
+                          });
+                        });
+                        setSyncToast(`تم إلغاء إسناد ${repCusts.length} عميل من المندوب بنجاح!`);
+                        setTimeout(() => setSyncToast(null), 4000);
+                      }
+                    }}
+                    className="text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-3 py-2 rounded-xl text-xs font-black transition cursor-pointer active:scale-95"
+                    title="إلغاء إسناد كل العملاء من هذا المندوب في حالة الخطأ"
+                  >
+                    إلغاء إسناد الكل ⚠️
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Customer List */}
+            <div className="p-4 overflow-y-auto flex-1 max-h-[50vh] space-y-2">
+              {(() => {
+                const repCustomers = customers.filter((c) => doesCustomerBelongToRep(c, selectedUserForCustomers));
+                const filtered = repCustomers.filter((c) => {
+                  if (!customerModalSearch.trim()) return true;
+                  const q = customerModalSearch.trim().toLowerCase();
+                  return (
+                    (c.name || '').toLowerCase().includes(q) ||
+                    (c.code || '').toLowerCase().includes(q) ||
+                    (c.phone || '').includes(q) ||
+                    (c.storeName || '').toLowerCase().includes(q)
+                  );
+                });
+
+                if (repCustomers.length === 0) {
+                  return (
+                    <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-slate-500 space-y-2">
+                      <Users className="w-8 h-8 mx-auto text-slate-400" />
+                      <p className="font-black text-sm text-slate-700">لا يوجد عملاء مسندين حالياً لهذا المندوب.</p>
+                      <p className="text-xs text-slate-500">
+                        يمكنك إسناد العملاء إليه من جدول العملاء في صفحة الاستيراد، أو تخصيص اسمه في شيت الإكسيل.
+                      </p>
+                    </div>
+                  );
+                }
+
+                if (filtered.length === 0) {
+                  return (
+                    <div className="p-6 text-center text-slate-500 text-xs font-bold">
+                      لا توجد نتائج تطابق بحثك "{customerModalSearch}".
+                    </div>
+                  );
+                }
+
+                const otherReps = users.filter(
+                  (u) => (u.role === 'sales_rep' || u.role === 'supervisor') && u.id !== selectedUserForCustomers.id
+                );
+
+                return (
+                  <div className="space-y-2">
+                    {filtered.map((cust, idx) => (
+                      <div
+                        key={cust.id}
+                        className="bg-white border border-slate-200 hover:border-amber-300 p-3 rounded-2xl shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-7 h-7 rounded-xl bg-slate-100 text-slate-600 font-bold text-xs flex items-center justify-center shrink-0">
+                            {idx + 1}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-black text-xs sm:text-sm text-slate-900">{cust.name}</h4>
+                              {cust.code && (
+                                <span className="font-mono text-[10px] font-bold text-amber-900 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                  {cust.code}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
+                              {cust.storeName && <span>🏪 {cust.storeName}</span>}
+                              {cust.phone && <span>📞 {cust.phone}</span>}
+                              {cust.address && <span>📍 {cust.address}</span>}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                          {/* Transfer to another rep */}
+                          <select
+                            defaultValue=""
+                            onChange={(e) => {
+                              const newRepId = e.target.value;
+                              if (!newRepId) return;
+                              const targetRep = users.find((u) => u.id === newRepId);
+                              if (targetRep) {
+                                updateCustomer({
+                                  ...cust,
+                                  repId: targetRep.id,
+                                  rep_name: targetRep.name,
+                                  repName: targetRep.name,
+                                  salesRepName: targetRep.name,
+                                  branchName: targetRep.branchName || cust.branchName,
+                                });
+                                setSyncToast(`تم نقل العميل "${cust.name}" إلى المندوب "${targetRep.name}" بنجاح.`);
+                                setTimeout(() => setSyncToast(null), 3000);
+                              }
+                            }}
+                            className="text-[11px] font-bold bg-slate-50 border border-slate-200 rounded-xl px-2 py-1 text-slate-700 focus:outline-none focus:border-amber-500"
+                            title="نقل العميل لمندوب آخر"
+                          >
+                            <option value="">نقل لمندوب آخر...</option>
+                            {otherReps.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.name} ({r.branchName})
+                              </option>
+                            ))}
+                          </select>
+
+                          {/* Unassign button */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateCustomer({
+                                ...cust,
+                                repId: undefined,
+                                rep_name: 'مندوب المبيعات',
+                                repName: 'مندوب المبيعات',
+                                salesRepName: 'مندوب المبيعات',
+                              });
+                            }}
+                            className="text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2.5 py-1 rounded-xl text-[11px] font-bold transition cursor-pointer"
+                            title="إلغاء الإسناد من هذا المندوب"
+                          >
+                            إلغاء الإسناد
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Footer */}
+            <div className="p-3 sm:p-4 bg-slate-100 border-t border-slate-200 flex justify-between items-center">
+              <span className="text-xs font-bold text-slate-600">
+                إجمالي عملاء المنظومة: {customers.length} عميل
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedUserForCustomers(null)}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-bold px-5 py-2 rounded-xl text-xs transition cursor-pointer"
+              >
+                إغلاق
               </button>
             </div>
           </div>
