@@ -127,7 +127,7 @@ export function extractGoogleSpreadsheetId(input: string): { sheetId: string; gi
 }
 
 /**
- * Build direct CSV export URL for any Google Sheet link
+ * Build direct CSV export URL for any Google Sheet link with cache-busting timestamp
  */
 export function buildGoogleSheetsPublicCsvUrl(input: string): string {
   const { sheetId, gid } = extractGoogleSpreadsheetId(input);
@@ -135,7 +135,8 @@ export function buildGoogleSheetsPublicCsvUrl(input: string): string {
     if (input.startsWith('http')) return input;
     return '';
   }
-  return `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`;
+  const timestamp = Date.now();
+  return `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}&_t=${timestamp}&_cache_bypass=${timestamp}`;
 }
 
 /**
@@ -679,7 +680,14 @@ export async function fetchAndParseGoogleSheet(googleSheetUrlOrId: string): Prom
   }
 
   try {
-    const response = await fetch(csvUrl);
+    const response = await fetch(csvUrl, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+        Expires: '0',
+      },
+    });
     if (!response.ok) {
       throw new Error(`تعذر جلب الشيت (كود ${response.status}). يرجى التأكد من أن الشيت منشور للعامة (Anyone with the link can view).`);
     }
@@ -1463,7 +1471,14 @@ export async function fetchCustomersFromGoogleSheetUrl(urlOrId: string): Promise
   totalRows: number;
 }> {
   const csvUrl = buildGoogleSheetsPublicCsvUrl(urlOrId);
-  const response = await fetch(csvUrl);
+  const response = await fetch(csvUrl, {
+    cache: 'no-store',
+    headers: {
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+    },
+  });
   if (!response.ok) {
     throw new Error(`فشل فتح رابط جوجل شيت (${response.statusText}). تأكد من أن الرابط متاح للعامة (Anyone with the link can view).`);
   }

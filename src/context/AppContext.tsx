@@ -885,6 +885,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       let matched = branchCompatibleReps.find(matchFn);
 
+      // Fallback: If not matched within strict branch, match across all reps since explicit rep name takes priority
+      if (!matched) {
+        matched = reps.find(matchFn);
+      }
+
       if (matched) {
         return {
           ...updated,

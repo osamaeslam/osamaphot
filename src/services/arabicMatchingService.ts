@@ -10,7 +10,7 @@ export function normalizeArabicText(str?: string): string {
   if (!str) return '';
   let text = str
     .toString()
-    // 1. Remove non-breaking spaces, zero-width chars, tabs
+    // 1. Remove non-breaking spaces, zero-width chars, tabs, BOMs
     .replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ')
     // 2. Remove Arabic Tashkeel / Harakat (Fatha, Damma, Kasra, Shadda, Sukun, Tanween...)
     .replace(/[\u064B-\u065F\u0670]/g, '')
@@ -23,13 +23,13 @@ export function normalizeArabicText(str?: string): string {
     // 6. Normalize Alef Maqsura (ى) -> ي, and common duplicated ya spelling (يحيى / يحيي)
     .replace(/ى/g, 'ي')
     .replace(/يي+/g, 'ي')
-    // 7. Normalize Hamzas (ؤ, ئ, ء)
+    // 7. Normalize Hamzas (ؤ, ئ, ء) -> "علاء" becomes "علا", matching "علا"
     .replace(/ؤ/g, 'و')
     .replace(/ئ/g, 'ي')
     .replace(/ء/g, '')
     // 8. Replace punctuation, brackets, dashes, and separators with spaces
-    .replace(/[\-_/\\()\[\]+.,:;*&^%$#@!~"'{}`|]/g, ' ')
-    // 9. Collapse spaces
+    .replace(/[\-_/\\()\[\]+.,:;*&^%$#@!~"'{}`|«»]/g, ' ')
+    // 9. Collapse multiple spaces into a single space and trim
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
@@ -139,8 +139,8 @@ export function getArabicTokens(str?: string): string[] {
 
 /**
  * Intelligent Arabic Name Matcher
- * Strictly compares Arabic names by token equality and normalized Arabic representations.
- * Prevents false positive matching between different individuals (e.g. "حسن محمد" will NOT match "محمد علي" or "أحمد محمد").
+ * Compares Arabic names with full tolerance for spaces, Hamza spellings (علاء vs علا),
+ * diacritics, honorific titles (كابتن/مندوب/م/), compound names, and multi-token prefixes.
  */
 export function isArabicNameMatch(nameA?: string, nameB?: string): boolean {
   if (!nameA || !nameB) return false;
@@ -148,6 +148,11 @@ export function isArabicNameMatch(nameA?: string, nameB?: string): boolean {
   const normB = normalizeCompoundNames(normalizeArabicText(nameB));
   if (!normA || !normB) return false;
   if (normA === normB) return true;
+
+  // Direct containment check (e.g. "علاء عمر" in "مندوب علاء عمر - المنيا" or "علاء عمر محمد")
+  if (normA.includes(normB) || normB.includes(normA)) {
+    return true;
+  }
 
   const tokensA = getArabicTokens(nameA);
   const tokensB = getArabicTokens(nameB);
@@ -157,28 +162,40 @@ export function isArabicNameMatch(nameA?: string, nameB?: string): boolean {
   const joinedB = tokensB.join(' ');
   if (joinedA === joinedB) return true;
 
-  // If one name has single token, it can ONLY match if both have single token and they are identical
-  if (tokensA.length === 1 || tokensB.length === 1) {
-    if (tokensA.length === 1 && tokensB.length === 1) {
-      return tokensA[0] === tokensB[0];
+  if (joinedA.includes(joinedB) || joinedB.includes(joinedA)) {
+    return true;
+  }
+
+  // Token matching heuristics (order-independent & multi-token tolerant)
+  const [shorter, longer] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA];
+  const longerSet = new Set(longer);
+
+  // If all tokens of shorter name exist in longer name (e.g. ['علا', 'عمر'] in ['علا', 'عمر', 'محمد'] or ['عمر', 'علا'])
+  const allShorterMatch = shorter.every((t) => longerSet.has(t));
+  if (allShorterMatch) {
+    return true;
+  }
+
+  // First name match
+  const firstMatch = tokensA[0] === tokensB[0];
+  if (firstMatch) {
+    // If one is 2 tokens and the other is >= 2 tokens sharing the first 2 tokens
+    if (tokensA.length >= 2 && tokensB.length >= 2 && tokensA[1] === tokensB[1]) {
+      return true;
     }
-    // A single word like "محمد" or "حسن" does NOT match a full composite name "حسن محمد"
-    return false;
+    // If shorter is 1 token and matches the first token of the other (e.g. "علاء" matching "علاء عمر")
+    if (shorter.length === 1 && longer.length <= 2) {
+      return true;
+    }
   }
 
-  // Both have at least 2 tokens (First name + Father's name / Family name)
-  // 1. First name MUST match exactly in order
-  if (tokensA[0] !== tokensB[0]) {
-    return false;
+  // Count shared tokens anywhere in the composite name
+  const sharedTokens = shorter.filter((t) => longerSet.has(t));
+  if (sharedTokens.length >= 2) {
+    return true;
   }
 
-  // 2. Second name MUST match exactly in order
-  if (tokensA[1] !== tokensB[1]) {
-    return false;
-  }
-
-  // 3. If one has 2 tokens and the other has >= 2 tokens with the same first 2 tokens (e.g. "حسن محمد" and "حسن محمد طنطاوي")
-  return true;
+  return false;
 }
 
 /**
@@ -557,26 +574,16 @@ export function isBranchMatch(
 
 /**
  * Check if a customer strictly belongs to a specific sales rep
- * Direct rep assignment (by repId or salesRepName/repName) takes top priority,
- * followed by fallback branch matching for unassigned customers.
+ * Direct rep assignment (by repId or salesRepName/repName) takes top priority.
  */
 export function doesCustomerBelongToRep(customer: Customer, repUser: User): boolean {
   if (!repUser) return false;
-
-  // Branch check: If customer and rep both have branches specified, they MUST match
-  if (repUser.branchName && customer.branchName) {
-    if (!isBranchMatch(customer.branchName, repUser.branchName, { allowUnassigned: false })) {
-      return false;
-    }
-  }
 
   // 1. Direct ID match (Highest authority)
   if (customer.repId && customer.repId.trim()) {
     if (customer.repId.trim() === (repUser.id || '').trim()) {
       return true;
     }
-    // Explicitly assigned to a different rep ID
-    return false;
   }
 
   // 2. Direct Match by rep_name / repName / salesRepName / representative_name
@@ -606,9 +613,9 @@ export function doesCustomerBelongToRep(customer: Customer, repUser: User): bool
   const currentRepName = (repUser.name || '').trim();
   const currentRepUsername = (repUser.username || '').trim();
 
-  // Exact trimmed equality
-  if (repField === currentRepName) return true;
-  if (currentRepUsername && repField === currentRepUsername) return true;
+  // Exact trimmed & case-insensitive equality
+  if (repField.toLowerCase() === currentRepName.toLowerCase()) return true;
+  if (currentRepUsername && repField.toLowerCase() === currentRepUsername.toLowerCase()) return true;
 
   // Phone match (if exact phone digits match)
   const cleanRepFieldPhone = repField.replace(/\D/g, '');
@@ -617,7 +624,7 @@ export function doesCustomerBelongToRep(customer: Customer, repUser: User): bool
     return true;
   }
 
-  // Exact normalized match
+  // Exact normalized match (ignoring tashkeel, hamzas, spaces, compounds)
   const normRepField = normalizeCompoundNames(normalizeArabicText(repField));
   const normUserName = normalizeCompoundNames(normalizeArabicText(currentRepName));
   const normUsername = normalizeArabicText(currentRepUsername);
@@ -629,7 +636,7 @@ export function doesCustomerBelongToRep(customer: Customer, repUser: User): bool
     return true;
   }
 
-  // Strict Arabic multi-token match
+  // Intelligent Arabic token match
   if (isArabicNameMatch(repField, currentRepName)) return true;
   if (currentRepUsername && isArabicNameMatch(repField, currentRepUsername)) return true;
 
